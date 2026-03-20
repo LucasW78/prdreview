@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, FileText, Search, Database, X, Eye, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { BookOpen, FileText, Search, Database, X, Eye, Trash2, AlertTriangle } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { ingestionApi } from '../api';
 
@@ -13,7 +13,6 @@ export default function KnowledgeBase() {
   const [previewContent, setPreviewContent] = useState<string>('');
   const [deleteDoc, setDeleteDoc] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   const loadDocuments = useCallback(() => {
     ingestionApi.getHistory()
@@ -36,7 +35,7 @@ export default function KnowledgeBase() {
       .catch(err => console.error(err));
 
     loadDocuments();
-  }, [loadDocuments, refreshKey]);
+  }, [loadDocuments]);
 
   const filteredDocuments = documents.filter(doc => {
     const moduleMatch = selectedModule === '全部' || doc.module === selectedModule;
@@ -76,7 +75,7 @@ export default function KnowledgeBase() {
     try {
       await ingestionApi.deleteDocument(deleteDoc.id);
       setDeleteDoc(null);
-      setRefreshKey(prev => prev + 1);
+      loadDocuments();
     } catch (err) {
       console.error('Failed to delete document:', err);
       alert('删除文档失败，请稍后重试。');
@@ -88,18 +87,9 @@ export default function KnowledgeBase() {
   return (
     <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
       <div className="max-w-6xl mx-auto space-y-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">知识库管理</h1>
-            <p className="text-slate-500 mt-1">浏览和管理已上传的 PRD 与 SOP 文档。</p>
-          </div>
-          <button
-            onClick={() => setRefreshKey(prev => prev + 1)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
-          >
-            <RefreshCw className="w-4 h-4" />
-            刷新
-          </button>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">知识库管理</h1>
+          <p className="text-slate-500 mt-1">浏览和管理已上传的 PRD 与 SOP 文档。</p>
         </div>
 
         <div className="flex border-b border-slate-200">

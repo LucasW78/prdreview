@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  db:
+    image: docker.m.daocloud.io/library/postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=rag_expert
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  qdrant:
+    image: docker.m.daocloud.io/qdrant/qdrant:latest
+    restart: always
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_SERVER=db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=rag_expert
+      - QDRANT_URL=http://qdrant:6333
+      - SECRET_KEY=changethiskeyinproduction
+      - GOOGLE_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - db
+      - qdrant
+
+volumes:
+  postgres_data:
+  qdrant_data:

@@ -1,0 +1,41 @@
+import { Database, FileSearch, Settings, LayoutDashboard, BookOpen } from 'lucide-react';
+
+export default function Sidebar({ activeTab, setActiveTab }: { activeTab: string, setActiveTab: (tab: any) => void }) {
+  return (
+    <div className="w-64 bg-slate-900 text-slate-300 flex flex-col">
+      <div className="p-4 flex items-center space-x-3 text-white font-semibold text-lg border-b border-slate-800">
+        <LayoutDashboard className="w-6 h-6 text-indigo-400" />
+        <span>RAG 评审专家</span>
+      </div>
+      <nav className="flex-1 py-4 space-y-1">
+        <button
+          onClick={() => setActiveTab('workbench')}
+          className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'workbench' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
+        >
+          <FileSearch className="w-5 h-5" />
+          <span>评审工作台</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('ingestion')}
+          className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'ingestion' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
+        >
+          <Database className="w-5 h-5" />
+          <span>数据投喂 (Ingestion)</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('knowledge')}
+          className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'knowledge' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
+        >
+          <BookOpen className="w-5 h-5" />
+          <span>知识库</span>
+        </button>
+      </nav>
+      <div className="p-4 border-t border-slate-800">
+        <button className="flex items-center space-x-3 text-slate-400 hover:text-white transition-colors">
+          <Settings className="w-5 h-5" />
+          <span>系统设置</span>
+        </button>
+      </div>
+    </div>
+  );
+}

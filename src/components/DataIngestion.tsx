@@ -145,7 +145,6 @@ export default function DataIngestion() {
       <div className="max-w-6xl mx-auto space-y-8">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">数据投喂模块 (Data Ingestion)</h1>
-          <p className="text-slate-500 mt-1">建立系统的“真理之源”，支持 PRD 与 SOP 规范库上传。</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

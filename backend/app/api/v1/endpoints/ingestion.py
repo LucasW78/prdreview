@@ -1,8 +1,10 @@
 import os
 import hashlib
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func
+from typing import Optional
 
 from app.db.base import get_db
 from app.models.all_models import DocumentMetadata
@@ -108,15 +110,43 @@ async def get_modules():
     }
 
 @router.get("/history", response_model=DocumentListResponse)
-async def get_upload_history(db: AsyncSession = Depends(get_db)):
+async def get_upload_history(
+    module: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    doc_type: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    db: AsyncSession = Depends(get_db)
+):
     """
     Get history of uploaded documents.
     """
-    result = await db.execute(
-        select(DocumentMetadata).order_by(DocumentMetadata.upload_time.desc())
-    )
+    stmt = select(DocumentMetadata)
+    if module and module != "全部":
+        stmt = stmt.where(DocumentMetadata.module == module)
+    if keyword:
+        stmt = stmt.where(DocumentMetadata.filename.ilike(f"%{keyword}%"))
+    if doc_type in {"prd", "sop"}:
+        stmt = stmt.where(DocumentMetadata.doc_type == doc_type)
+    stmt = stmt.order_by(DocumentMetadata.upload_time.desc())
+
+    # Get total count
+    count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = count_result.scalar() or 0
+
+    # Apply pagination
+    page_size = 6
+    offset = (page - 1) * page_size
+    stmt = stmt.offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
     documents = result.scalars().all()
-    return {"documents": documents}
+    return {
+        "documents": documents,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if page_size > 0 else 1
+    }
 
 @router.get("/document/{doc_id}")
 async def get_document_content(doc_id: int, db: AsyncSession = Depends(get_db)):

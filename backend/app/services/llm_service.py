@@ -2,7 +2,8 @@ import json
 import re
 from typing import List, Dict, Any
 from langchain_community.chat_models import ChatTongyi
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from app.core.config import settings
 
 # Initialize Qwen LLM (DashScope)
@@ -121,3 +122,49 @@ async def analyze_conflicts(module: str, new_content: str, retrieved_docs: List[
             "blocks": [{"id": "b1", "originalText": new_content, "aiText": new_content + "\n\n(AI分析结果解析失败，请查看后台日志)", "hasChange": False}],
             "conflicts": [{"id": "err1", "type": "conflict", "description": f"AI Response Parsing Error. Raw content: {content[:100]}...", "ignored": False, "blockId": "b1"}]
         }
+
+QA_SYSTEM_PROMPT = """你是一个专业的知识库问答助手。
+请基于以下提供的参考文档片段，回答用户的问题。
+要求：
+1. 回答要清晰、准确、专业。
+2. 如果参考文档中没有能够回答该问题的信息，请直接回复"抱歉，根据现有知识库内容，我无法回答这个问题。"。请不要编造答案。
+3. 请尽可能结合多个文档片段提供全面的解答。
+4. 可以使用 Markdown 格式来排版你的回答，使其更易读。
+
+【参考文档片段开始】
+{context}
+【参考文档片段结束】
+"""
+
+def answer_question(query: str, retrieved_docs: List[Dict], history: List[Dict] = None) -> str:
+    """
+    通用知识库问答方法，支持多轮对话上下文。
+    """
+    # 组装上下文
+    context_parts = []
+    for i, doc in enumerate(retrieved_docs):
+        context_parts.append(f"--- 片段 {i+1} ---\n来源: {doc.get('filename')}\n内容: {doc.get('content')}\n")
+    context_str = "\n".join(context_parts) if context_parts else "未检索到相关参考文档。"
+
+    # 组装消息列表
+    messages = [
+        SystemMessage(content=QA_SYSTEM_PROMPT.format(context=context_str))
+    ]
+
+    # 添加历史记录
+    if history:
+        for msg in history:
+            if msg.get("role") == "user":
+                messages.append(HumanMessage(content=msg.get("content")))
+            elif msg.get("role") == "assistant":
+                messages.append(AIMessage(content=msg.get("content")))
+
+    # 添加当前问题
+    messages.append(HumanMessage(content=query))
+
+    try:
+        response = llm.invoke(messages)
+        return response.content
+    except Exception as e:
+        print(f"Error in answer_question: {e}")
+        return "抱歉，在生成回答时遇到了服务器错误，请稍后再试。"

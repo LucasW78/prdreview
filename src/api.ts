@@ -11,7 +11,8 @@ const apiClient = axios.create({
 
 export const ingestionApi = {
   getModules: () => apiClient.get('/ingestion/modules'),
-  getHistory: () => apiClient.get('/ingestion/history'),
+  getHistory: (params?: { module?: string; keyword?: string; doc_type?: string; page?: number }) =>
+    apiClient.get('/ingestion/history', { params }),
   uploadDocument: (formData: FormData) => 
     apiClient.post('/ingestion/upload', formData, {
       headers: {
@@ -29,6 +30,11 @@ export const reviewApi = {
     apiClient.post('/review/analyze', data),
   merge: (taskId: number, finalContent: string) => 
     apiClient.post(`/review/merge/${taskId}`, { finalContent }),
+};
+
+export const chatApi = {
+  ask: (data: { query: string; module: string; history: any[] }, signal?: AbortSignal) =>
+    apiClient.post('/chat/ask', data, { signal }),
 };
 
 export default apiClient;

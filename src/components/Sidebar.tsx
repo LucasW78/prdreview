@@ -1,4 +1,4 @@
-import { Database, FileSearch, Settings, LayoutDashboard, BookOpen } from 'lucide-react';
+import { FileSearch, Settings, LayoutDashboard, BookOpen, MessageSquare } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab }: { activeTab: string, setActiveTab: (tab: any) => void }) {
   return (
@@ -16,18 +16,18 @@ export default function Sidebar({ activeTab, setActiveTab }: { activeTab: string
           <span>评审工作台</span>
         </button>
         <button
-          onClick={() => setActiveTab('ingestion')}
-          className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'ingestion' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
-        >
-          <Database className="w-5 h-5" />
-          <span>数据投喂 (Ingestion)</span>
-        </button>
-        <button
           onClick={() => setActiveTab('knowledge')}
           className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'knowledge' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
         >
           <BookOpen className="w-5 h-5" />
-          <span>知识库</span>
+          <span>知识库管理</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`w-full flex items-center space-x-3 px-4 py-3 transition-colors ${activeTab === 'chat' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}
+        >
+          <MessageSquare className="w-5 h-5" />
+          <span>智能问答</span>
         </button>
       </nav>
       <div className="p-4 border-t border-slate-800">

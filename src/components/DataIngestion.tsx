@@ -143,10 +143,6 @@ export default function DataIngestion() {
   return (
     <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
       <div className="max-w-6xl mx-auto space-y-8">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">数据投喂模块 (Data Ingestion)</h1>
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="flex items-center space-x-3 mb-4">

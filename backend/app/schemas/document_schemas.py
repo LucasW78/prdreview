@@ -27,3 +27,7 @@ class UploadResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     documents: List[DocumentMetadata]
+    total: int = 0
+    page: int = 1
+    page_size: int = 6
+    total_pages: int = 1

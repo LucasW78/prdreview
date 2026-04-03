@@ -140,7 +140,7 @@ def process_document(content: str, module: str, filename: str) -> int:
         
     return len(points)
 
-def search_similar_documents(query: str, module: str, limit: int = 5) -> List[Dict]:
+def search_similar_documents(query: str, module: str = None, limit: int = 5) -> List[Dict]:
     """
     Search for similar documents in Qdrant with time weighting.
     """
@@ -148,15 +148,17 @@ def search_similar_documents(query: str, module: str, limit: int = 5) -> List[Di
     
     query_vector = _retry_embed_query(query)
     
-    # Filter by module
-    search_filter = models.Filter(
-        must=[
-            models.FieldCondition(
-                key="module",
-                match=models.MatchValue(value=module)
-            )
-        ]
-    )
+    # Filter by module if specified
+    search_filter = None
+    if module:
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="module",
+                    match=models.MatchValue(value=module)
+                )
+            ]
+        )
     
     hits = qdrant_client.search(
         collection_name=COLLECTION_NAME,
@@ -188,6 +190,7 @@ def search_similar_documents(query: str, module: str, limit: int = 5) -> List[Di
             "content": payload.get("content"),
             "header_path": payload.get("header_path"),
             "filename": payload.get("filename"),
+            "module": payload.get("module", "未知模块"),
             "time_weight": time_weight
         })
         

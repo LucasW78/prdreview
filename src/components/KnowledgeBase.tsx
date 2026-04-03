@@ -1,7 +1,8 @@
 import React from 'react';
-import { BookOpen, FileText, Search, Database, X, Eye, Trash2, AlertTriangle } from 'lucide-react';
+import { BookOpen, FileText, Search, Database, X, Eye, Trash2, AlertTriangle, Upload } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { ingestionApi } from '../api';
+import DataIngestion from './DataIngestion';
 
 export default function KnowledgeBase() {
   const [modules, setModules] = useState<string[]>(['支付模块', '任务调度', '用户中心']);
@@ -9,21 +10,63 @@ export default function KnowledgeBase() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'prd' | 'sop'>('prd');
+  const [loading, setLoading] = useState(false);
+  const [hasQueried, setHasQueried] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalDocs, setTotalDocs] = useState(0);
   const [previewDoc, setPreviewDoc] = useState<any>(null);
   const [previewContent, setPreviewContent] = useState<string>('');
   const [deleteDoc, setDeleteDoc] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   const loadDocuments = useCallback(() => {
-    ingestionApi.getHistory()
+    setLoading(true);
+    setHasQueried(true);
+    ingestionApi.getHistory({
+      module: selectedModule === '全部' ? undefined : selectedModule,
+      keyword: searchQuery.trim() || undefined,
+      doc_type: activeTab,
+      page: currentPage
+    })
       .then(res => {
         if (res.data && res.data.documents) {
-          console.log('Documents from API:', res.data.documents);
           setDocuments(res.data.documents);
+          setTotalDocs(res.data.total || 0);
+        } else {
+          setDocuments([]);
+          setTotalDocs(0);
         }
       })
-      .catch(err => console.error(err));
-  }, []);
+      .catch(err => {
+        console.error(err);
+        setDocuments([]);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [selectedModule, searchQuery, activeTab, currentPage]);
+
+  useEffect(() => {
+    if (hasQueried) {
+      loadDocuments();
+    }
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (!hasQueried) {
+      return;
+    }
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+      return;
+    }
+    loadDocuments();
+  }, [activeTab]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedModule, searchQuery, activeTab]);
 
   useEffect(() => {
     ingestionApi.getModules()
@@ -33,25 +76,7 @@ export default function KnowledgeBase() {
         }
       })
       .catch(err => console.error(err));
-
-    loadDocuments();
-  }, [loadDocuments]);
-
-  const filteredDocuments = documents.filter(doc => {
-    const moduleMatch = selectedModule === '全部' || doc.module === selectedModule;
-    const searchMatch = searchQuery === '' || 
-      doc.filename.toLowerCase().includes(searchQuery.toLowerCase());
-    return moduleMatch && searchMatch;
-  });
-
-  const prdDocuments = filteredDocuments.filter(doc => {
-    console.log('Checking PRD doc:', doc.filename, 'doc_type:', doc.doc_type);
-    return doc.doc_type === 'prd' || !doc.doc_type;
-  });
-  const sopDocuments = filteredDocuments.filter(doc => {
-    console.log('Checking SOP doc:', doc.filename, 'doc_type:', doc.doc_type);
-    return doc.doc_type === 'sop';
-  });
+  }, []);
 
   const handlePreview = async (doc: any) => {
     setPreviewDoc(doc);
@@ -84,17 +109,69 @@ export default function KnowledgeBase() {
     }
   };
 
+  const handleSearch = () => {
+    if (currentPage === 1) {
+      loadDocuments();
+      return;
+    }
+    setCurrentPage(1);
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSearch();
+    }
+  };
+
+  const handleTabChange = (tab: 'prd' | 'sop') => {
+    if (tab === activeTab) {
+      return;
+    }
+    setActiveTab(tab);
+    if (hasQueried) {
+      setDocuments([]);
+      setTotalDocs(0);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
+      {showUpload && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <h2 className="text-xl font-bold text-slate-900">上传文档</h2>
+              <button
+                onClick={() => setShowUpload(false)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+              <DataIngestion />
+            </div>
+          </div>
+        </div>
+      )}
+      
       <div className="max-w-6xl mx-auto space-y-8">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">知识库管理</h1>
-          <p className="text-slate-500 mt-1">浏览和管理已上传的 PRD 与 SOP 文档。</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">知识库管理</h1>
+          </div>
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+          >
+            <Upload className="w-4 h-4" />
+            上传
+          </button>
         </div>
 
         <div className="flex border-b border-slate-200">
           <button
-            onClick={() => setActiveTab('prd')}
+            onClick={() => handleTabChange('prd')}
             className={`px-6 py-3 font-medium text-sm transition-colors border-b-2 ${
               activeTab === 'prd'
                 ? 'border-indigo-600 text-indigo-600'
@@ -107,7 +184,7 @@ export default function KnowledgeBase() {
             </div>
           </button>
           <button
-            onClick={() => setActiveTab('sop')}
+            onClick={() => handleTabChange('sop')}
             className={`px-6 py-3 font-medium text-sm transition-colors border-b-2 ${
               activeTab === 'sop'
                 ? 'border-indigo-600 text-indigo-600'
@@ -129,14 +206,15 @@ export default function KnowledgeBase() {
               placeholder="搜索文档名称..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white text-slate-700"
+              onKeyDown={handleSearchKeyDown}
+              className="w-full h-11 pl-10 pr-4 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white text-slate-700"
             />
           </div>
           <div className="w-full md:w-48">
             <select 
               value={selectedModule}
               onChange={(e) => setSelectedModule(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white text-slate-700"
+              className="w-full h-11 border border-slate-300 rounded-lg px-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white text-slate-700"
             >
               <option value="全部">全部模块</option>
               {modules.map(mod => (
@@ -144,12 +222,34 @@ export default function KnowledgeBase() {
               ))}
             </select>
           </div>
+          <button
+            onClick={handleSearch}
+            disabled={loading}
+            className="w-full md:w-auto h-11 flex items-center justify-center gap-2 px-5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Search className="w-4 h-4" />
+            查询
+          </button>
         </div>
 
         {activeTab === 'prd' && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {prdDocuments.length === 0 ? (
+              {loading ? (
+                <div className="col-span-full">
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+                    <h3 className="text-lg font-medium text-slate-700 mb-2">查询中...</h3>
+                  </div>
+                </div>
+              ) : !hasQueried ? (
+                <div className="col-span-full">
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+                    <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-slate-700 mb-2">请先点击查询</h3>
+                    <p className="text-slate-500">设置筛选条件后，点击右侧【查询】按钮加载文档</p>
+                  </div>
+                </div>
+              ) : documents.length === 0 ? (
                 <div className="col-span-full">
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                     <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
@@ -158,7 +258,7 @@ export default function KnowledgeBase() {
                   </div>
                 </div>
               ) : (
-                prdDocuments.map((doc: any) => (
+                documents.map((doc: any) => (
                   <div 
                     key={doc.id} 
                     className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow"
@@ -209,8 +309,39 @@ export default function KnowledgeBase() {
                 ))
               )}
             </div>
-            <div className="text-center text-sm text-slate-500">
-              共 {prdDocuments.length} 个 PRD 文档
+            <div className="flex items-center justify-between px-1">
+              <span className="text-sm text-slate-500">
+                共 {totalDocs} 个 PRD 文档
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1 || loading}
+                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ‹
+                </button>
+                {Array.from({ length: Math.ceil(totalDocs / 6) || 1 }, (_, i) => i + 1).map(page => (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page)}
+                    className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                      page === currentPage
+                        ? 'bg-indigo-600 text-white'
+                        : 'border border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalDocs / 6) || 1, p + 1))}
+                  disabled={currentPage === (Math.ceil(totalDocs / 6) || 1) || loading}
+                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ›
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -218,7 +349,21 @@ export default function KnowledgeBase() {
         {activeTab === 'sop' && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {sopDocuments.length === 0 ? (
+              {loading ? (
+            <div className="col-span-full">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+                <h3 className="text-lg font-medium text-slate-700 mb-2">查询中...</h3>
+              </div>
+            </div>
+          ) : !hasQueried ? (
+            <div className="col-span-full">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+                <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-slate-700 mb-2">请先点击查询</h3>
+                <p className="text-slate-500">设置筛选条件后，点击右侧【查询】按钮加载文档</p>
+              </div>
+            </div>
+          ) : documents.length === 0 ? (
             <div className="col-span-full">
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                 <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
@@ -227,7 +372,7 @@ export default function KnowledgeBase() {
               </div>
             </div>
           ) : (
-                sopDocuments.map((doc: any) => (
+                documents.map((doc: any) => (
                   <div 
                     key={doc.id} 
                     className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow"
@@ -278,8 +423,39 @@ export default function KnowledgeBase() {
                 ))
               )}
             </div>
-            <div className="text-center text-sm text-slate-500">
-              共 {sopDocuments.length} 个 SOP 文档
+            <div className="flex items-center justify-between px-1">
+              <span className="text-sm text-slate-500">
+                共 {totalDocs} 个 SOP 文档
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1 || loading}
+                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ‹
+                </button>
+                {Array.from({ length: Math.ceil(totalDocs / 6) || 1 }, (_, i) => i + 1).map(page => (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page)}
+                    className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                      page === currentPage
+                        ? 'bg-emerald-600 text-white'
+                        : 'border border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalDocs / 6) || 1, p + 1))}
+                  disabled={currentPage === (Math.ceil(totalDocs / 6) || 1) || loading}
+                  className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ›
+                </button>
+              </div>
             </div>
           </>
         )}

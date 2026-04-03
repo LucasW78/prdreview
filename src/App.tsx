@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import Sidebar from './components/Sidebar';
-import DataIngestion from './components/DataIngestion';
 import ReviewWorkbench from './components/ReviewWorkbench';
 import KnowledgeBase from './components/KnowledgeBase';
 import KnowledgeChat from './components/KnowledgeChat';
@@ -20,16 +19,13 @@ interface SourceDoc {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'ingestion' | 'workbench' | 'knowledge' | 'chat'>('workbench');
+  const [activeTab, setActiveTab] = useState<'workbench' | 'knowledge' | 'chat'>('workbench');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
       <main className="flex-1 overflow-hidden flex flex-col">
-        <div className={activeTab === 'ingestion' ? 'h-full' : 'hidden'}>
-          <DataIngestion />
-        </div>
         <div className={activeTab === 'workbench' ? 'h-full' : 'hidden'}>
           <ReviewWorkbench />
         </div>

@@ -2,7 +2,7 @@ import json
 import re
 from typing import List, Dict, Any
 from langchain_community.chat_models import ChatTongyi
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from app.core.config import settings
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from typing import Any
 from app.schemas.chat_schemas import ChatRequest, ChatResponse, SourceDoc
 from app.services.rag_service import search_similar_documents

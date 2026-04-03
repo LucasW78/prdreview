@@ -1,61 +1,58 @@
 # RAG Requirement Review Expert
 
-基于 RAG 技术的需求评审知识库平台，支持 PRD/SOP 文档管理、智能问答与需求冲突检测。
+面向 PRD / SOP 的 RAG 评审与问答平台，提供三大能力：
+- 需求冲突分析（评审工作台）
+- 知识库管理（上传 / 查询 / 预览 / 删除 / 分页）
+- 智能问答（基于知识库检索 + 引用来源展示）
 
-## 功能模块
+## 本次代码重构说明
 
-### 1. 评审工作台
-上传 PRD/SOP 文档，AI 自动分析新旧需求之间的逻辑冲突、SOP 缺失和补充建议，以可视化卡片呈现。
+已完成一轮全量 CR（前后端模块引用关系扫描）：
+- 未发现可安全删除的“整文件未引用模块”
+- 清理了确认无用的死导入
+- 移除了前端不可达页面态：`ingestion` 顶层 Tab（实际入口在知识库上传弹窗）
 
-### 2. 知识库管理
-- **PRD 知识库** / **SOP 知识库**：分 Tab 管理两类文档
-- 支持按模块、关键词搜索，手动触发查询
-- 分页展示（每页 6 条），支持在线预览和删除
-- 文档上传自动向量化入库
+## 功能概览
 
-### 3. 智能问答
-- 基于 RAG 检索的私域知识库问答
-- **多轮对话上下文管理**：Query Rewrite 自动将指代性问题重写为独立查询，提升检索召回率
-- 参考来源悬浮展示，点击可跳转至知识库对应文档
-- 流式输出，打字机式阅读体验
+### 1) 评审工作台
+- 输入新需求内容
+- 结合历史文档检索结果进行冲突分析
+- 输出修改建议、冲突项、补充信息
+
+### 2) 知识库管理
+- PRD / SOP 双 Tab 管理
+- 条件查询：模块 + 关键词
+- 分页展示：每页 6 条
+- 在线预览、删除文档
+- 上传文档后自动入库（元数据 + 向量）
+
+### 3) 智能问答
+- 基于检索文档回答问题
+- 展示参考来源和匹配分数
+- 支持中止请求
 
 ## 技术栈
 
 ### 前端
-- **React 18** + **Vite** + **TypeScript**
-- **TailwindCSS** + **Lucide Icons**
-- **Axios** + 原生 Fetch（SSE 流式）
+- React 18 + Vite + TypeScript
+- TailwindCSS + Lucide
+- Axios
 
 ### 后端
-- **FastAPI** (Python 3.11)
-- **SQLAlchemy** (AsyncSession) + **PostgreSQL**
-- **Qdrant** 向量数据库
-- **LangChain** + **DashScope** (Qwen-plus)
-- Docker Compose 一键部署
+- FastAPI
+- SQLAlchemy (Async) + PostgreSQL
+- Qdrant
+- LangChain + DashScope(Qwen)
 
 ## 快速启动
 
-### 前端
-
+### 1. 安装前端依赖
 ```bash
-cd rag-requirement-review-expert
 npm install
-npm run dev
 ```
 
-> 访问 http://localhost:3000
-
-### 后端（Docker）
-
-```bash
-docker-compose up --build -d
-```
-
-> API 文档：http://localhost:8000/docs
-
-### 环境变量
-
-在项目根目录创建 `.env` 文件：
+### 2. 配置环境变量
+在项目根目录创建 `.env`：
 
 ```env
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/prd_review
@@ -64,45 +61,54 @@ QDRANT_PORT=6333
 DASHSCOPE_API_KEY=your_dashscope_api_key_here
 ```
 
-## 项目结构
-
+### 3. 启动后端（Docker）
+```bash
+docker-compose up --build -d
 ```
-rag-requirement-review-expert/
-├── src/                          # 前端源码
-│   ├── api.ts                    # API 封装
-│   ├── App.tsx                   # 根组件（路由 + 状态保留）
-│   └── components/
-│       ├── DataIngestion.tsx     # 文档上传组件
-│       ├── KnowledgeBase.tsx     # 知识库管理（分页 + 查询）
-│       ├── KnowledgeChat.tsx     # 智能问答（流式 + 来源跳转）
-│       └── ReviewWorkbench.tsx   # 评审工作台
-├── backend/
-│   ├── app/
-│   │   ├── api/v1/endpoints/    # FastAPI 路由
-│   │   │   ├── chat.py           # 问答接口（含 Query Rewrite）
-│   │   │   ├── ingestion.py      # 文档上传/删除/历史查询（含分页）
-│   │   │   └── review.py          # 冲突分析接口
-│   │   ├── services/
-│   │   │   ├── llm_service.py    # LLM 调用（ChatTongyi + 提示词管理）
-│   │   │   └── rag_service.py    # Qdrant 向量检索
-│   │   ├── schemas/              # Pydantic 模型
-│   │   └── models/               # SQLAlchemy 模型
-│   ├── uploads/                  # 文档存储目录
-│   └── requirements.txt
-└── docker-compose.yml
+
+### 4. 启动前端
+```bash
+npm run dev
+```
+
+- 前端：http://localhost:3000
+- 后端文档：http://localhost:8000/docs
+
+## 目录结构
+
+```text
+src/
+  App.tsx
+  api.ts
+  components/
+    Sidebar.tsx
+    ReviewWorkbench.tsx
+    KnowledgeBase.tsx
+    KnowledgeChat.tsx
+    DataIngestion.tsx
+
+backend/app/
+  api/v1/endpoints/
+    review.py
+    ingestion.py
+    chat.py
+    auth.py
+  services/
+    llm_service.py
+    rag_service.py
+    user_service.py
+  schemas/
+  models/
 ```
 
 ## 核心接口
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/api/v1/chat/ask` | POST | RAG 问答（含流式响应） |
-| `/api/v1/ingestion/upload` | POST | 上传文档并向量化 |
-| `/api/v1/ingestion/history` | GET | 查询文档列表（支持分页+条件过滤） |
-| `/api/v1/ingestion/document/{id}` | GET | 读取文档内容 |
-| `/api/v1/ingestion/document/{id}` | DELETE | 删除文档（文件+元数据+向量） |
-| `/api/v1/ingestion/modules` | GET | 获取模块列表 |
-| `/api/v1/review/analyze` | POST | PRD/SOP 冲突分析 |
+- `POST /api/v1/review/analyze`：需求冲突分析
+- `POST /api/v1/ingestion/upload`：上传文档
+- `GET /api/v1/ingestion/history`：知识库列表（含分页）
+- `GET /api/v1/ingestion/document/{id}`：文档预览
+- `DELETE /api/v1/ingestion/document/{id}`：删除文档
+- `POST /api/v1/chat/ask`：知识库问答
 
 ## License
 

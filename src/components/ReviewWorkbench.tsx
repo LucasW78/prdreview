@@ -279,7 +279,11 @@ export default function ReviewWorkbench() {
       setConflicts(data.conflicts || []);
       setTaskId(data.task_id);
       setProcessTime(data.processing_time_sec);
-      setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
+      if (effectiveConflicts.length === 0) {
+        setOptimizedContentDisplay(finalContent);
+      } else {
+        setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
+      }
       
     } catch (err: any) {
       console.error(err);

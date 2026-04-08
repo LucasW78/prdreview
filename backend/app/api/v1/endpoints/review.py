@@ -151,7 +151,7 @@ async def merge_confirmation(
         if existing_doc:
             await db.commit()
             return {
-                "message": "Merge confirmed and document already exists in knowledge base",
+                "message": "文档已存在，知识库无需重复索引",
                 "task_id": task_id,
                 "document_id": existing_doc.id,
                 "chunks_processed": 0
@@ -192,14 +192,14 @@ async def merge_confirmation(
 
         if indexing_error:
             return {
-                "message": "Merge confirmed, but knowledge base indexing failed",
+                "message": "Merge 成功，但知识库索引失败",
                 "task_id": task_id,
                 "document_id": new_doc.id,
                 "chunks_processed": chunks_count,
                 "indexing_error": indexing_error
             }
         return {
-            "message": "Merge confirmed and archived to knowledge base",
+            "message": "Merge 成功，文档已归档至知识库",
             "task_id": task_id,
             "document_id": new_doc.id,
             "chunks_processed": chunks_count

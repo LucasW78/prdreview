@@ -254,7 +254,6 @@ export default function KnowledgeBase() {
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                     <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-slate-700 mb-2">暂无 PRD 文档</h3>
-                    <p className="text-slate-500">前往【数据投喂】上传第一个 PRD 文档</p>
                   </div>
                 </div>
               ) : (
@@ -263,15 +262,20 @@ export default function KnowledgeBase() {
                     key={doc.id} 
                     className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow"
                   >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-3">
+                    <div className="flex items-start justify-between mb-4 gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
                           <FileText className="w-6 h-6" />
                         </div>
-                        <div className="min-w-0">
-                          <h3 className="font-semibold text-slate-800 truncate" title={doc.filename}>
-                            {doc.filename}
-                          </h3>
+                        <div className="min-w-0 flex-1">
+                          <div className="relative group/title min-w-0">
+                            <h3 className="font-semibold text-slate-800 truncate cursor-default block w-full">
+                              {doc.filename}
+                            </h3>
+                            <div className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-72 max-w-[80vw] rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700 whitespace-normal break-words shadow-xl group-hover/title:block">
+                              {doc.filename}
+                            </div>
+                          </div>
                           <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">
                             {doc.module}
                           </span>
@@ -368,7 +372,6 @@ export default function KnowledgeBase() {
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                 <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-slate-700 mb-2">暂无 SOP 文档</h3>
-                <p className="text-slate-500">前往【数据投喂】上传第一个 SOP 文档</p>
               </div>
             </div>
           ) : (
@@ -377,15 +380,20 @@ export default function KnowledgeBase() {
                     key={doc.id} 
                     className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow"
                   >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-3">
+                    <div className="flex items-start justify-between mb-4 gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
                           <BookOpen className="w-6 h-6" />
                         </div>
-                        <div className="min-w-0">
-                          <h3 className="font-semibold text-slate-800 truncate" title={doc.filename}>
-                            {doc.filename}
-                          </h3>
+                        <div className="min-w-0 flex-1">
+                          <div className="relative group/title min-w-0">
+                            <h3 className="font-semibold text-slate-800 truncate cursor-default block w-full">
+                              {doc.filename}
+                            </h3>
+                            <div className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-72 max-w-[80vw] rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700 whitespace-normal break-words shadow-xl group-hover/title:block">
+                              {doc.filename}
+                            </div>
+                          </div>
                           <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">
                             {doc.module}
                           </span>

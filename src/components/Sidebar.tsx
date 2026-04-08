@@ -1,4 +1,4 @@
-import { FileSearch, Settings, LayoutDashboard, BookOpen, MessageSquare } from 'lucide-react';
+import { FileSearch, LayoutDashboard, BookOpen, MessageSquare } from 'lucide-react';
 
 export default function Sidebar({ activeTab, setActiveTab }: { activeTab: string, setActiveTab: (tab: any) => void }) {
   return (
@@ -30,12 +30,6 @@ export default function Sidebar({ activeTab, setActiveTab }: { activeTab: string
           <span>智能问答</span>
         </button>
       </nav>
-      <div className="p-4 border-t border-slate-800">
-        <button className="flex items-center space-x-3 text-slate-400 hover:text-white transition-colors">
-          <Settings className="w-5 h-5" />
-          <span>系统设置</span>
-        </button>
-      </div>
     </div>
   );
 }

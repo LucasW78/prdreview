@@ -1,15 +1,42 @@
 import time
 import json
+import os
+import hashlib
+import re
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from app.db.base import get_db
-from app.models.all_models import ReviewTask, ConflictCard
+from app.models.all_models import ReviewTask, ConflictCard, DocumentMetadata
 from app.schemas.review_schemas import ReviewRequest, ReviewResponse, DocBlockItem, ConflictItem, SupplementaryInfoItem
-from app.services.rag_service import search_similar_documents
+from app.services.rag_service import search_similar_documents, process_document
 from app.services.llm_service import analyze_conflicts
 
 router = APIRouter()
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def _extract_requirement_title(content: str) -> str:
+    lines = content.splitlines()
+    for line in lines:
+        m = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    for line in lines:
+        m = re.match(r"^\s*(?:需求标题|标题)\s*[：:]\s*(.+?)\s*$", line)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    for line in lines:
+        s = line.strip()
+        if s:
+            return s
+    return "未命名需求"
+
+def _sanitize_filename_title(title: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]', " ", title).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or "未命名需求"
 
 @router.post("/analyze", response_model=ReviewResponse)
 async def analyze_requirement(
@@ -103,18 +130,83 @@ async def merge_confirmation(
     of the new final document into the knowledge base.
     """
     final_content = payload.get("finalContent") or payload.get("final_content")
-    if not final_content or not isinstance(final_content, str):
+    if not isinstance(final_content, str) or not final_content.strip():
         raise HTTPException(status_code=422, detail="finalContent is required")
+    final_content = final_content.strip()
 
-    task = await db.get(ReviewTask, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-        
-    task.status = "merged"
-    task.optimized_content = final_content
-    await db.commit()
-    
-    # In a full implementation, we would call process_document() here 
-    # to add this new final_content back into Qdrant as the latest truth.
-    
-    return {"message": "Merge confirmed successfully", "task_id": task_id}
+    try:
+        task = await db.get(ReviewTask, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        task.status = "merged"
+        task.optimized_content = final_content
+
+        content_bytes = final_content.encode("utf-8")
+        content_hash = hashlib.md5(content_bytes).hexdigest()
+        existing_result = await db.execute(
+            select(DocumentMetadata).filter(DocumentMetadata.content_hash == content_hash)
+        )
+        existing_doc = existing_result.scalars().first()
+        if existing_doc:
+            await db.commit()
+            return {
+                "message": "Merge confirmed and document already exists in knowledge base",
+                "task_id": task_id,
+                "document_id": existing_doc.id,
+                "chunks_processed": 0
+            }
+
+        requirement_title = _extract_requirement_title(final_content)
+        safe_title = _sanitize_filename_title(requirement_title)
+        filename = f"{safe_title}.md"
+        file_path = os.path.join(UPLOAD_DIR, f"{content_hash}_{filename}")
+        with open(file_path, "wb") as f:
+            f.write(content_bytes)
+
+        chunks_count = 0
+        indexing_error = None
+        try:
+            chunks_count = process_document(final_content, task.module, filename)
+        except Exception as e:
+            indexing_error = str(e)
+
+        await db.execute(
+            DocumentMetadata.__table__.update()
+            .where(DocumentMetadata.module == task.module)
+            .where(DocumentMetadata.doc_type == "prd")
+            .values(is_latest=False)
+        )
+
+        new_doc = DocumentMetadata(
+            filename=filename,
+            module=task.module,
+            doc_type="prd",
+            content_hash=content_hash,
+            file_path=file_path,
+            is_latest=True
+        )
+        db.add(new_doc)
+        await db.commit()
+        await db.refresh(new_doc)
+
+        if indexing_error:
+            return {
+                "message": "Merge confirmed, but knowledge base indexing failed",
+                "task_id": task_id,
+                "document_id": new_doc.id,
+                "chunks_processed": chunks_count,
+                "indexing_error": indexing_error
+            }
+        return {
+            "message": "Merge confirmed and archived to knowledge base",
+            "task_id": task_id,
+            "document_id": new_doc.id,
+            "chunks_processed": chunks_count
+        }
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Merge failed: {str(e)}")

@@ -12,17 +12,22 @@ export default function EditableTextBlock({ value, onChange, isHighlighted = fal
   const [historyIndex, setHistoryIndex] = useState(0);
   const onChangeRef = useRef(onChange);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isLocalUpdateRef = useRef(false);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
 
   useEffect(() => {
+    if (isLocalUpdateRef.current) {
+      isLocalUpdateRef.current = false;
+      return;
+    }
     if (value !== history[historyIndex]) {
       setHistory([value]);
       setHistoryIndex(0);
     }
-  }, [value]);
+  }, [value, history, historyIndex]);
 
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
@@ -49,6 +54,7 @@ export default function EditableTextBlock({ value, onChange, isHighlighted = fal
     newHistory.push(newValue);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
+    isLocalUpdateRef.current = true;
     onChangeRef.current(newValue);
   }, [history, historyIndex]);
 
@@ -87,7 +93,7 @@ export default function EditableTextBlock({ value, onChange, isHighlighted = fal
     <div className="relative group">
       <div className="absolute top-1 right-1 hidden group-hover:flex gap-0.5 z-10">
         <button 
-          onMouseDown={handleUndoClick}
+          onClick={handleUndoClick}
           disabled={!canUndo}
           className="px-1.5 py-0.5 text-[10px] bg-white border border-slate-200 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           title="撤销 (Ctrl+Z)"
@@ -95,7 +101,7 @@ export default function EditableTextBlock({ value, onChange, isHighlighted = fal
           ↩
         </button>
         <button 
-          onMouseDown={handleRedoClick}
+          onClick={handleRedoClick}
           disabled={!canRedo}
           className="px-1.5 py-0.5 text-[10px] bg-white border border-slate-200 rounded hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           title="重做 (Ctrl+Y)"

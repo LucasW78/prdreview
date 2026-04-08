@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, CheckCircle, Info, GitMerge, X, Maximize2, Play, FileText, UploadCloud, Trash2, FileUp } from 'lucide-react';
 import { Conflict, DocBlock } from '../types';
 import { reviewApi, ingestionApi } from '../api';
-import EditableTextBlock from './EditableTextBlock';
 
 export default function ReviewWorkbench() {
   const [blocks, setBlocks] = useState<DocBlock[]>([]);
@@ -24,6 +23,9 @@ export default function ReviewWorkbench() {
   const [taskId, setTaskId] = useState<number | null>(null);
   const [processTime, setProcessTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [originContentDisplay, setOriginContentDisplay] = useState<string>('');
+  const [optimizedContentDisplay, setOptimizedContentDisplay] = useState<string>('');
+  const [isEditingOptimized, setIsEditingOptimized] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -36,6 +38,123 @@ export default function ReviewWorkbench() {
     }
     return inputText;
   }, [fileContent, inputText]);
+
+  const toFinalAiText = useCallback((originalText: string, aiText: string) => {
+    if (!aiText) return aiText;
+    const marker = "【优化建议】";
+    const idx = aiText.indexOf(marker);
+    if (idx === -1) return aiText.trim();
+    const before = aiText.slice(0, idx).trim();
+    const suggestion = aiText.slice(idx + marker.length).trim();
+    if (before && before !== originalText.trim()) {
+      return before;
+    }
+    if (suggestion.includes("不具备强制覆盖性") || suggestion.includes("非强制覆盖") || suggestion.includes("参考建议")) {
+      return originalText
+        .replace("具备强制覆盖性，能直接修改业务逻辑。", "不具备强制覆盖性，作为参考建议用于提示评审，不直接修改业务逻辑。")
+        .replace("强制覆盖", "参考建议（非强制）")
+        .trim();
+    }
+    if (suggestion.includes("建议") && originalText.includes("必须")) {
+      return originalText.replace("必须", "建议").trim();
+    }
+    return before || originalText;
+  }, []);
+
+  const buildOptimizedDocument = useCallback((origin: string, blks: any[]) => {
+    let finalDoc = origin || '';
+    if (!finalDoc) return finalDoc;
+    const blocksSorted = [...blks].sort((a, b) => (b.originalText?.length || 0) - (a.originalText?.length || 0));
+    const normalizeForMatch = (s: string) =>
+      (s || '')
+        .replace(/[*`#>\-_\[\]\(\)]/g, '')
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[：:，,。；;！!？?]/g, '')
+        .toLowerCase()
+        .trim();
+    const replaceOnce = (src: string, search: string, replacement: string) => {
+      if (!search) return src;
+      const idx = src.indexOf(search);
+      if (idx === -1) return src;
+      return src.slice(0, idx) + replacement + src.slice(idx + search.length);
+    };
+    const replaceByNormalizedLine = (src: string, search: string, replacement: string) => {
+      const nSearch = normalizeForMatch(search);
+      if (!nSearch) return src;
+      const lines = src.split('\n');
+      let replaced = false;
+      const nextLines = lines.map((line) => {
+        if (replaced) return line;
+        const nLine = normalizeForMatch(line);
+        if (!nLine) return line;
+        if (nLine.includes(nSearch) || nSearch.includes(nLine)) {
+          replaced = true;
+          const indent = (line.match(/^\s*/) || [''])[0];
+          const bullet = (line.match(/^\s*([*\-]\s+)/) || [,''])[1];
+          const cleanedReplacement = replacement.replace(/^\s*([*\-]\s+)/, '').trim();
+          const prefix = `${indent}${bullet || ''}`;
+          return `${prefix}${cleanedReplacement}`;
+        }
+        return line;
+      });
+      return replaced ? nextLines.join('\n') : src;
+    };
+    const dedupeNearLines = (doc: string) => {
+      const lines = doc.split('\n');
+      const out: string[] = [];
+      for (const line of lines) {
+        const n = normalizeForMatch(line);
+        const prev = out.length > 0 ? normalizeForMatch(out[out.length - 1]) : '';
+        if (n && prev && n === prev) continue;
+        out.push(line);
+      }
+      return out.join('\n');
+    };
+    let applied = 0;
+    for (const b of blocksSorted) {
+      const orig = (b.originalText || '').trim();
+      const ai = toFinalAiText(orig, b.aiText || '');
+      if (!orig || !ai) continue;
+      if (orig === ai) continue;
+      const next = replaceOnce(finalDoc, orig, ai);
+      if (next !== finalDoc) {
+        finalDoc = next;
+        applied += 1;
+        continue;
+      }
+      const fuzzyNext = replaceByNormalizedLine(finalDoc, orig, ai);
+      if (fuzzyNext !== finalDoc) {
+        finalDoc = fuzzyNext;
+        applied += 1;
+      }
+    }
+    if (applied === 0) {
+      // Fallback: 拼接块级 AI 文本，确保能看到优化内容
+      return dedupeNearLines(
+        blks.map(b => toFinalAiText(b.originalText || '', b.aiText || '') || b.originalText || '').join('\n\n')
+      );
+    }
+    return dedupeNearLines(finalDoc);
+  }, [toFinalAiText]);
+
+  const normalizeForCompare = useCallback((s: string) =>
+    (s || '')
+      .replace(/[*`#>\-_\[\]\(\)]/g, '')
+      .replace(/[\s\u3000]+/g, '')
+      .replace(/[：:，,。；;！!？?]/g, '')
+      .toLowerCase()
+      .trim()
+  , []);
+
+  const computeHighlighted = useCallback((origin: string, optimized: string) => {
+    const oLines = (origin || '').split('\n');
+    const set = new Set(oLines.map(normalizeForCompare).filter(Boolean));
+    return (optimized || '').split('\n').map((line) => {
+      const n = normalizeForCompare(line);
+      const changed = n.length > 0 && !set.has(n);
+      return { line, changed };
+    });
+  }, [normalizeForCompare]);
 
   const undoInputText = useCallback(() => {
     if (canUndoInput) {
@@ -137,6 +256,7 @@ export default function ReviewWorkbench() {
     
     setIsAnalyzing(true);
     setError(null);
+    setOriginContentDisplay(finalContent);
     
     try {
       const response = await reviewApi.analyze({
@@ -145,10 +265,21 @@ export default function ReviewWorkbench() {
       });
       
       const data = response.data;
-      setBlocks(data.blocks || []);
+      const cleanedBlocks = (data.blocks || []).map((b: any) => ({
+        ...b,
+        aiText: toFinalAiText(b.originalText || '', b.aiText || '')
+      }));
+      const effectiveConflicts = (data.conflicts || []).filter((c: any) => !c.ignored);
+      const withConflictAwareChange = cleanedBlocks.map((b: any) => {
+        const related = effectiveConflicts.filter((c: any) => c.blockId === b.id);
+        const changed = (b.aiText || '').trim() !== (b.originalText || '').trim();
+        return { ...b, hasChange: related.length > 0 ? changed : b.hasChange };
+      });
+      setBlocks(withConflictAwareChange);
       setConflicts(data.conflicts || []);
       setTaskId(data.task_id);
       setProcessTime(data.processing_time_sec);
+      setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
       
     } catch (err: any) {
       console.error(err);
@@ -163,6 +294,8 @@ export default function ReviewWorkbench() {
     setConflicts([]);
     setTaskId(null);
     setInputText('');
+    setOriginContentDisplay('');
+    setOptimizedContentDisplay('');
     setInputHistory(['']);
     setInputHistoryIndex(0);
     setUploadedFile(null);
@@ -176,24 +309,32 @@ export default function ReviewWorkbench() {
     setConflicts(conflicts.map(c => c.id === conflictId ? { ...c, ignored: !c.ignored } : c));
   };
 
-  const handleAiTextChange = (blockId: string, newText: string) => {
-    setBlocks(blocks.map(b => b.id === blockId ? { ...b, aiText: newText } : b));
-  };
+  const handleAiTextChange = (blockId: string, newText: string) => {};
 
   const handleMergeConfirm = async () => {
-    if (!taskId) return;
+    if (!taskId) {
+      setError('缺少任务 ID，请重新执行评审后再 Merge');
+      return;
+    }
     try {
-      const finalContent = blocks.map(b => b.aiText).join('\n\n');
-      await reviewApi.merge(taskId, finalContent);
+      const finalContent = (optimizedContentDisplay || buildOptimizedDocument(originContentDisplay, blocks)).trim();
+      if (!finalContent) {
+        setError('Merge 内容为空，请先完成优化内容');
+        return;
+      }
+      const response = await reviewApi.merge(taskId, finalContent);
       setIsMergeModalOpen(false);
-      alert('Merge 成功！文档已归档。');
+      const mergeMsg = response.data?.message || 'Merge 成功！文档已归档。';
+      const indexingErr = response.data?.indexing_error;
+      alert(indexingErr ? `${mergeMsg}\n${indexingErr}` : mergeMsg);
       setBlocks([]);
       setConflicts([]);
       setInputText('');
       setTaskId(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Merge 失败');
+      const detail = err?.response?.data?.detail || err?.message || '未知错误';
+      alert(`Merge 失败：${detail}`);
     }
   };
 
@@ -350,10 +491,11 @@ export default function ReviewWorkbench() {
 
   if (isAnalyzing) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-        <h3 className="text-lg font-medium text-slate-700">正在进行检索与冲突分析...</h3>
-        <p className="text-slate-500 mt-2 text-sm">这可能需要 10-30 秒，请稍候</p>
+      <div className="h-full w-full flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center justify-center text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+          <h3 className="text-lg font-medium text-slate-700">正在进行检索与冲突分析...</h3>
+        </div>
       </div>
     );
   }
@@ -397,11 +539,7 @@ export default function ReviewWorkbench() {
             <span>原始需求文档 (只读)</span>
           </div>
           <div className="flex-1 overflow-y-auto p-5 space-y-6 font-mono text-sm text-slate-600 leading-relaxed">
-            {blocks.map(block => (
-              <div key={`orig-${block.id}`} className="whitespace-pre-wrap">
-                {block.originalText}
-              </div>
-            ))}
+            <pre className="whitespace-pre-wrap">{originContentDisplay}</pre>
           </div>
         </div>
 
@@ -411,25 +549,34 @@ export default function ReviewWorkbench() {
               <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
               AI 优化后文档 (可编辑)
             </span>
+            <button
+              onClick={() => setIsEditingOptimized(v => !v)}
+              className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded hover:bg-indigo-100 text-indigo-700"
+            >
+              {isEditingOptimized ? '完成编辑' : '编辑'}
+            </button>
           </div>
           <div className="flex-1 overflow-y-auto p-5 space-y-6 font-mono text-sm text-slate-800 leading-relaxed">
-            {blocks.map(block => {
-              const relatedConflicts = conflicts.filter(c => c.blockId === block.id && !c.ignored);
-              const isHighlighted = block.hasChange && relatedConflicts.length > 0;
-              
-              return (
-                <div key={`ai-${block.id}`} className="relative group">
-                  {isHighlighted && (
-                    <div className="absolute -left-3 top-0 bottom-0 w-1 bg-amber-400 rounded-full"></div>
-                  )}
-                  <EditableTextBlock
-                    value={block.aiText}
-                    onChange={(newText) => handleAiTextChange(block.id, newText)}
-                    isHighlighted={isHighlighted}
-                  />
-                </div>
-              );
-            })}
+            {isEditingOptimized ? (
+              <textarea
+                value={optimizedContentDisplay}
+                onChange={(e) => setOptimizedContentDisplay(e.target.value)}
+                className="w-full min-h-[300px] h-full border border-slate-200 rounded-lg p-3 font-mono resize-y focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            ) : (
+              <div className="space-y-1">
+                {computeHighlighted(originContentDisplay, optimizedContentDisplay).map((row, idx) => (
+                  <div
+                    key={idx}
+                    className={`whitespace-pre-wrap rounded ${
+                      row.changed ? 'bg-amber-50 border-l-4 border-amber-400 pl-2' : ''
+                    }`}
+                  >
+                    {row.line || ' '}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -506,7 +653,7 @@ export default function ReviewWorkbench() {
             <div className="flex-1 overflow-y-auto p-8 bg-slate-100">
               <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-slate-200 min-h-full">
                 <div className="prose prose-slate max-w-none font-mono text-sm leading-loose whitespace-pre-wrap">
-                  {blocks.map(b => b.aiText).join('\n\n')}
+                  {(optimizedContentDisplay || buildOptimizedDocument(originContentDisplay, blocks)).trim()}
                 </div>
               </div>
             </div>

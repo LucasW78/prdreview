@@ -49,8 +49,8 @@ export default function PromptManagement() {
 
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
-      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-[calc(100vh-140px)] flex flex-col gap-4">
+        <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-indigo-600" />
             <h1 className="text-2xl font-bold text-slate-900">提示词管理</h1>
@@ -73,12 +73,12 @@ export default function PromptManagement() {
             </button>
           </div>
         </div>
-        <p className="text-sm text-slate-500">回显评审工作台系统提示词，支持编辑后应用。</p>
+        <p className="text-sm text-slate-500 shrink-0">回显评审工作台系统提示词，支持编辑后应用。</p>
         <textarea
           value={draftPrompt}
           onChange={(e) => setDraftPrompt(e.target.value)}
           disabled={isLoading}
-          className="w-full min-h-[360px] resize-y border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none"
+          className="w-full flex-1 min-h-0 resize-none border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none overflow-y-auto"
           placeholder={isLoading ? '加载中...' : '请输入系统提示词'}
         />
       </div>

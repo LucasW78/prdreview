@@ -28,6 +28,20 @@ export const ingestionApi = {
 export const reviewApi = {
   analyze: (data: { module: string; content: string; sop_ids?: string[] }) => 
     apiClient.post('/review/analyze', data),
+  listTasks: () =>
+    apiClient.get('/review/tasks'),
+  deleteTask: (taskId: number) =>
+    apiClient.delete(`/review/tasks/${taskId}`),
+  getTaskStatus: (taskId: number) =>
+    apiClient.get(`/review/tasks/${taskId}`),
+  saveSnapshot: (taskId: number, data: { module?: string; processing_time_sec?: number; blocks?: any[]; conflicts?: any[]; supplementaryInfo?: any[] }) =>
+    apiClient.post(`/review/tasks/${taskId}/snapshots`, data),
+  rerunTask: (taskId: number, data: { module?: string; content: string }) =>
+    apiClient.post(`/review/tasks/${taskId}/rerun`, data),
+  getSystemPrompt: () =>
+    apiClient.get('/review/system-prompt'),
+  applySystemPrompt: (prompt: string) =>
+    apiClient.put('/review/system-prompt', { prompt }),
   merge: (taskId: number, finalContent: string) => 
     apiClient.post(`/review/merge/${taskId}`, { finalContent }),
 };

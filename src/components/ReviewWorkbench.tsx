@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, CheckCircle, Info, GitMerge, X, Maximize2, Play, FileText, UploadCloud, Trash2, FileUp } from 'lucide-react';
 import { Conflict, DocBlock } from '../types';
 import { reviewApi, ingestionApi } from '../api';
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 export default function ReviewWorkbench() {
   const [blocks, setBlocks] = useState<DocBlock[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
-  
   const [modules, setModules] = useState<string[]>(['支付模块', '任务调度', '用户中心']);
   const [selectedModule, setSelectedModule] = useState<string>('支付模块');
   
@@ -19,15 +21,23 @@ export default function ReviewWorkbench() {
   const [fileContent, setFileContent] = useState<string>('');
   const [isReadingFile, setIsReadingFile] = useState(false);
   
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [taskId, setTaskId] = useState<number | null>(null);
   const [processTime, setProcessTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [originContentDisplay, setOriginContentDisplay] = useState<string>('');
   const [optimizedContentDisplay, setOptimizedContentDisplay] = useState<string>('');
   const [isEditingOptimized, setIsEditingOptimized] = useState<boolean>(false);
+  const [activeInputTab, setActiveInputTab] = useState<'markdown' | 'file'>('markdown');
+  const [snapshotHistory, setSnapshotHistory] = useState<any[]>([]);
+  const [saveHint, setSaveHint] = useState<string>('');
+  const [reviewJobs, setReviewJobs] = useState<any[]>([]);
+  const [activeTaskId, setActiveTaskId] = useState<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingTimerRef = useRef<number | null>(null);
+  const jobsRef = useRef<any[]>([]);
+  const activeTaskIdRef = useRef<number | null>(null);
 
   const canUndoInput = inputHistoryIndex > 0;
   const canRedoInput = inputHistoryIndex < inputHistory.length - 1;
@@ -202,19 +212,59 @@ export default function ReviewWorkbench() {
 
   const readFileContent = useCallback((file: File) => {
     setIsReadingFile(true);
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const arrayBuffer = e.target?.result as ArrayBuffer;
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          const texts: string[] = [];
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items
+              .map((item: any) => ('str' in item ? item.str : ''))
+              .join(' ')
+              .trim();
+            if (pageText) {
+              texts.push(pageText);
+            }
+          }
+          const content = texts.join('\n\n');
+          if (!content.trim()) {
+            setError('PDF 文本提取失败，请确认文件内容可复制或先转换为文本版后上传。');
+            setFileContent('');
+          } else {
+            setFileContent(content);
+            setError(null);
+          }
+        } catch (err) {
+          console.error(err);
+          setError('PDF 解析失败，请确认文件未加密且内容可读取。');
+          setFileContent('');
+        } finally {
+          setIsReadingFile(false);
+        }
+      };
+      reader.onerror = () => {
+        setError('PDF 文件读取失败');
+        setIsReadingFile(false);
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     const reader = new FileReader();
-    
     reader.onload = (e) => {
       const content = e.target?.result as string;
       setFileContent(content);
+      setError(null);
       setIsReadingFile(false);
     };
-    
     reader.onerror = () => {
       setError('文件读取失败');
       setIsReadingFile(false);
     };
-    
     reader.readAsText(file);
   }, []);
 
@@ -247,6 +297,126 @@ export default function ReviewWorkbench() {
       .catch(err => console.error(err));
   }, []);
 
+  useEffect(() => {
+    jobsRef.current = reviewJobs;
+  }, [reviewJobs]);
+
+  useEffect(() => {
+    activeTaskIdRef.current = activeTaskId;
+  }, [activeTaskId]);
+
+  const stopPolling = useCallback(() => {
+    if (pollingTimerRef.current) {
+      window.clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }, []);
+
+  const applyReviewResult = useCallback((data: any, finalContent: string) => {
+    const result = data?.result;
+    if (!result) return;
+    const cleanedBlocks = (result.blocks || []).map((b: any) => ({
+      ...b,
+      aiText: toFinalAiText(b.originalText || '', b.aiText || '')
+    }));
+    const effectiveConflicts = (result.conflicts || []).filter((c: any) => !c.ignored);
+    const withConflictAwareChange = cleanedBlocks.map((b: any) => {
+      const related = effectiveConflicts.filter((c: any) => c.blockId === b.id);
+      const changed = (b.aiText || '').trim() !== (b.originalText || '').trim();
+      return { ...b, hasChange: related.length > 0 ? changed : b.hasChange };
+    });
+    setBlocks(withConflictAwareChange);
+    setConflicts(result.conflicts || []);
+    setTaskId(data.task_id);
+    setProcessTime(data.processing_time_sec || result.processing_time_sec || null);
+    setSnapshotHistory(data.snapshots || []);
+    if (effectiveConflicts.length === 0) {
+      setOptimizedContentDisplay(finalContent);
+    } else {
+      setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
+    }
+  }, [toFinalAiText, buildOptimizedDocument]);
+
+  const openCompletedTask = useCallback((job: any) => {
+    if (!job?.result) return;
+    setActiveTaskId(job.taskId);
+    setTaskId(job.taskId);
+    setOriginContentDisplay(job.originContent || '');
+    applyReviewResult(
+      {
+        task_id: job.taskId,
+        processing_time_sec: job.processing_time_sec,
+        result: job.result,
+        snapshots: job.snapshots || []
+      },
+      job.originContent || ''
+    );
+  }, [applyReviewResult]);
+
+  const mapTaskToJob = useCallback((task: any) => ({
+    taskId: task.task_id,
+    module: task.module,
+    documentName: task.document_name || '未命名文档',
+    status: task.status,
+    originContent: task.origin_content || '',
+    processing_time_sec: task.processing_time_sec ?? null,
+    error_message: task.error_message ?? null,
+    snapshots: task.snapshots || [],
+    result: task.result || null,
+    created_at: task.snapshots?.[0]?.created_at || ''
+  }), []);
+
+  useEffect(() => {
+    if (pollingTimerRef.current) return;
+    pollingTimerRef.current = window.setInterval(async () => {
+      const currentJobs = jobsRef.current;
+      const pendingJobs = currentJobs.filter((j) => j.status === 'pending' || j.status === 'processing');
+      if (pendingJobs.length === 0) return;
+      const updates = await Promise.all(
+        pendingJobs.map(async (j) => {
+          try {
+            const res = await reviewApi.getTaskStatus(j.taskId);
+            return { ok: true, taskId: j.taskId, data: res.data };
+          } catch {
+            return { ok: false, taskId: j.taskId };
+          }
+        })
+      );
+      setReviewJobs((prev) =>
+        prev.map((job) => {
+          const matched = updates.find((u) => u.taskId === job.taskId && u.ok);
+          if (!matched || !matched.ok) return job;
+          const d: any = matched.data;
+          const next = {
+            ...job,
+            documentName: d.document_name || job.documentName,
+            status: d.status,
+            originContent: d.origin_content || job.originContent,
+            processing_time_sec: d.processing_time_sec,
+            error_message: d.error_message,
+            snapshots: d.snapshots || [],
+            result: d.result || job.result
+          };
+          return next;
+        })
+      );
+    }, 1500);
+    return () => {
+      stopPolling();
+    };
+  }, [stopPolling]);
+
+  useEffect(() => {
+    reviewApi.listTasks()
+      .then((res) => {
+        const tasks = res.data?.tasks || [];
+        setReviewJobs(tasks.map(mapTaskToJob));
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+  }, [mapTaskToJob]);
+
   const handleAnalyze = async () => {
     const finalContent = getFinalContent();
     if (!finalContent.trim()) {
@@ -254,49 +424,154 @@ export default function ReviewWorkbench() {
       return;
     }
     
-    setIsAnalyzing(true);
+    setIsSubmittingReview(true);
     setError(null);
-    setOriginContentDisplay(finalContent);
+    const deriveDocumentName = () => {
+      if (uploadedFile?.name?.trim()) return uploadedFile.name.trim();
+      const firstLine = (finalContent || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.length > 0) || '';
+      const heading = firstLine.replace(/^#{1,6}\s*/, '').trim();
+      return (heading || '未命名文档').slice(0, 120);
+    };
+    const documentName = deriveDocumentName();
     
-    try {
+    const enqueueReviewTask = async (content: string, docName: string) => {
       const response = await reviewApi.analyze({
         module: selectedModule,
-        content: finalContent
+        content
       });
-      
-      const data = response.data;
-      const cleanedBlocks = (data.blocks || []).map((b: any) => ({
-        ...b,
-        aiText: toFinalAiText(b.originalText || '', b.aiText || '')
-      }));
-      const effectiveConflicts = (data.conflicts || []).filter((c: any) => !c.ignored);
-      const withConflictAwareChange = cleanedBlocks.map((b: any) => {
-        const related = effectiveConflicts.filter((c: any) => c.blockId === b.id);
-        const changed = (b.aiText || '').trim() !== (b.originalText || '').trim();
-        return { ...b, hasChange: related.length > 0 ? changed : b.hasChange };
-      });
-      setBlocks(withConflictAwareChange);
-      setConflicts(data.conflicts || []);
-      setTaskId(data.task_id);
-      setProcessTime(data.processing_time_sec);
-      if (effectiveConflicts.length === 0) {
-        setOptimizedContentDisplay(finalContent);
-      } else {
-        setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
+      const newTaskId = response.data?.task_id;
+      if (!newTaskId) {
+        throw new Error('提交评审任务失败，未返回 task_id');
       }
-      
+      setReviewJobs((prev) => [
+        {
+          taskId: newTaskId,
+          module: selectedModule,
+          documentName: docName,
+          status: response.data?.status || 'pending',
+          originContent: content,
+          processing_time_sec: null,
+          error_message: null,
+          snapshots: [],
+          result: null,
+          created_at: new Date().toISOString()
+        },
+        ...prev
+      ]);
+    };
+
+    try {
+      await enqueueReviewTask(finalContent, documentName);
+
+      // 提交后仅保留左侧任务记录，右侧评审页面重置
+      setBlocks([]);
+      setConflicts([]);
+      setTaskId(null);
+      setActiveTaskId(null);
+      setProcessTime(null);
+      setOriginContentDisplay('');
+      setOptimizedContentDisplay('');
+      setSnapshotHistory([]);
+      setInputText('');
+      setInputHistory(['']);
+      setInputHistoryIndex(0);
+      setUploadedFile(null);
+      setFileContent('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.response?.data?.detail || "分析失败，请检查网络或后端服务。");
     } finally {
-      setIsAnalyzing(false);
+      setIsSubmittingReview(false);
     }
   };
 
-  const handleResetInput = useCallback(() => {
+  const handleReReview = useCallback(async () => {
+    const currentTaskId = taskId ?? activeTaskId;
+    if (!currentTaskId) {
+      setError('请先选择一个评审任务再重新评审');
+      return;
+    }
+    const content = (optimizedContentDisplay || buildOptimizedDocument(originContentDisplay, blocks) || originContentDisplay).trim();
+    if (!content) {
+      setError('当前无可重新评审内容');
+      return;
+    }
+    const firstLine = content
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) || '';
+    const heading = firstLine.replace(/^#{1,6}\s*/, '').trim();
+    const documentName = (heading || '未命名文档').slice(0, 120);
+
+    setIsSubmittingReview(true);
+    setError(null);
+    try {
+      const response = await reviewApi.rerunTask(currentTaskId, {
+        module: selectedModule,
+        content
+      });
+      setReviewJobs((prev) =>
+        prev.map((job) =>
+          job.taskId === currentTaskId
+            ? {
+                ...job,
+                module: selectedModule,
+                documentName,
+                status: response.data?.status || 'pending',
+                originContent: content,
+                processing_time_sec: null,
+                error_message: null,
+                snapshots: [],
+                result: null
+              }
+            : job
+        )
+      );
+      setBlocks([]);
+      setConflicts([]);
+      setTaskId(null);
+      setActiveTaskId(null);
+      setProcessTime(null);
+      setOriginContentDisplay('');
+      setOptimizedContentDisplay('');
+      setSnapshotHistory([]);
+      setInputText('');
+      setInputHistory(['']);
+      setInputHistoryIndex(0);
+      setUploadedFile(null);
+      setFileContent('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.response?.data?.detail || "重新评审失败，请检查网络或后端服务。");
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  }, [taskId, activeTaskId, optimizedContentDisplay, buildOptimizedDocument, originContentDisplay, blocks, selectedModule]);
+
+  const handleResetInput = useCallback(async () => {
+    const currentTaskId = taskId ?? activeTaskId;
+    if (currentTaskId) {
+      try {
+        await reviewApi.deleteTask(currentTaskId);
+      } catch (err) {
+        console.error(err);
+      }
+      setReviewJobs((prev) => prev.filter((job) => job.taskId !== currentTaskId));
+    }
     setBlocks([]);
     setConflicts([]);
     setTaskId(null);
+    setActiveTaskId(null);
+    setProcessTime(null);
     setInputText('');
     setOriginContentDisplay('');
     setOptimizedContentDisplay('');
@@ -304,16 +579,96 @@ export default function ReviewWorkbench() {
     setInputHistoryIndex(0);
     setUploadedFile(null);
     setFileContent('');
+    setSnapshotHistory([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, []);
+  }, [taskId, activeTaskId]);
 
   const handleIgnoreConflict = (conflictId: string) => {
     setConflicts(conflicts.map(c => c.id === conflictId ? { ...c, ignored: !c.ignored } : c));
   };
 
   const handleAiTextChange = (blockId: string, newText: string) => {};
+
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, [stopPolling]);
+
+  const handleSelectTask = useCallback((job: any) => {
+    setActiveTaskId(job.taskId);
+    if (job.status === 'completed' && job.result) {
+      openCompletedTask(job);
+      return;
+    }
+    setBlocks([]);
+    setConflicts([]);
+    setTaskId(job.taskId);
+    setProcessTime(job.processing_time_sec ?? null);
+    setOriginContentDisplay(job.originContent || '');
+    setOptimizedContentDisplay('');
+    setSnapshotHistory(job.snapshots || []);
+  }, [openCompletedTask]);
+
+  const statusMeta = (status: string) => {
+    if (status === 'completed') return { text: '已完成', cls: 'bg-emerald-100 text-emerald-700' };
+    if (status === 'processing') return { text: '评审中', cls: 'bg-indigo-100 text-indigo-700' };
+    if (status === 'failed') return { text: '失败', cls: 'bg-red-100 text-red-700' };
+    return { text: '待评审', cls: 'bg-amber-100 text-amber-700' };
+  };
+
+  const sidebarPanel = (
+    <div className="p-2 sm:p-3 h-full min-h-[420px] border-r border-slate-200">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-slate-800">评审快照列表</h3>
+        <span className="text-xs text-slate-500">
+          {reviewJobs.length} 任务 / {reviewJobs.reduce((acc, j) => acc + ((j.snapshots || []).length || 0), 0)} 快照
+        </span>
+      </div>
+      <div className="space-y-2 overflow-y-auto max-h-[calc(100vh-240px)] pr-1">
+        {reviewJobs.length === 0 ? (
+          <div className="text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg p-3">
+            暂无评审任务
+          </div>
+        ) : (
+          reviewJobs.map((job) => {
+            const meta = statusMeta(job.status);
+            const active = activeTaskId === job.taskId;
+            return (
+              <button
+                key={job.taskId}
+                onClick={() => handleSelectTask(job)}
+                className={`w-full text-left border rounded-lg p-3 transition-colors ${active ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="text-xs font-medium text-slate-700 truncate block min-w-0 flex-1"
+                    title={job.documentName || `任务 #${job.taskId}`}
+                  >
+                    {job.documentName || `任务 #${job.taskId}`}
+                  </span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded ${meta.cls}`}>{meta.text}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500 flex items-center gap-1 min-w-0">
+                  <span className="truncate min-w-0" title={job.module}>{job.module}</span>
+                  <span className="shrink-0">· 任务 #{job.taskId}</span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">快照 {(job.snapshots || []).length}</div>
+                {job.status === 'processing' && (
+                  <div className="mt-2 flex items-center gap-1 text-xs text-indigo-600">
+                    <div className="animate-spin rounded-full h-3 w-3 border-b border-indigo-600"></div>
+                    正在检索与冲突分析
+                  </div>
+                )}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 
   const handleMergeConfirm = async () => {
     if (!taskId) {
@@ -331,9 +686,14 @@ export default function ReviewWorkbench() {
       const mergeMsg = response.data?.message || 'Merge 成功！文档已归档。';
       const indexingErr = response.data?.indexing_error;
       alert(indexingErr ? `${mergeMsg}\n${indexingErr}` : mergeMsg);
+      setReviewJobs((prev) => prev.filter((job) => job.taskId !== taskId));
+      setActiveTaskId(null);
+      setSnapshotHistory([]);
       setBlocks([]);
       setConflicts([]);
       setInputText('');
+      setOriginContentDisplay('');
+      setOptimizedContentDisplay('');
       setTaskId(null);
     } catch (err: any) {
       console.error(err);
@@ -342,10 +702,42 @@ export default function ReviewWorkbench() {
     }
   };
 
-  if (blocks.length === 0 && !isAnalyzing) {
+  const handleSaveSnapshot = useCallback(async () => {
+    const currentTaskId = taskId ?? activeTaskId;
+    if (!currentTaskId) {
+      setError('请先发起或选择一个评审任务后再保存快照');
+      alert('请先发起或选择一个评审任务后再保存快照');
+      return;
+    }
+    try {
+      const res = await reviewApi.saveSnapshot(currentTaskId, {
+        module: selectedModule,
+        processing_time_sec: processTime ?? undefined,
+        blocks: blocks || [],
+        conflicts: conflicts || [],
+        supplementaryInfo: []
+      });
+      const updated = mapTaskToJob(res.data);
+      setReviewJobs((prev) =>
+        prev.map((job) => (job.taskId === currentTaskId ? { ...job, ...updated } : job))
+      );
+      if (activeTaskId === currentTaskId) {
+        setSnapshotHistory(res.data?.snapshots || []);
+      }
+      setSaveHint('快照已保存');
+      window.setTimeout(() => setSaveHint(''), 1600);
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.response?.data?.detail || '快照保存失败');
+    }
+  }, [taskId, activeTaskId, selectedModule, processTime, blocks, conflicts, mapTaskToJob]);
+
+  if (blocks.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 p-8">
-        <div className="w-full max-w-5xl bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+      <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
+        <div className="w-full max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-140px)]">
+          {sidebarPanel}
+          <div className="p-2 sm:p-4 h-full overflow-y-auto min-h-0">
           <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
             <FileText className="w-6 h-6 text-indigo-600" />
             发起新需求评审
@@ -363,25 +755,45 @@ export default function ReviewWorkbench() {
               <select 
                 value={selectedModule}
                 onChange={(e) => setSelectedModule(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50"
+                className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 truncate"
+                title={selectedModule}
               >
                 {modules.map(mod => (
                   <option key={mod} value={mod}>{mod}</option>
                 ))}
               </select>
             </div>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="flex flex-col h-full">
-                <label className="block text-sm font-medium text-slate-700 flex items-center gap-2 mb-2 shrink-0">
-                  <FileText className="w-4 h-4 text-indigo-500" />
+            <div className="flex border-b border-slate-200">
+              <button
+                onClick={() => setActiveInputTab('markdown')}
+                className={`px-6 py-3 font-medium text-sm transition-colors border-b-2 ${
+                  activeInputTab === 'markdown'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
                   Markdown 输入
-                  {inputText.trim() && !fileContent.trim() && (
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                      将使用此内容
-                    </span>
-                  )}
-                </label>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveInputTab('file')}
+                className={`px-6 py-3 font-medium text-sm transition-colors border-b-2 ${
+                  activeInputTab === 'file'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <FileUp className="w-4 h-4" />
+                  上传文件
+                </div>
+              </button>
+            </div>
+
+            <div>
+              {activeInputTab === 'markdown' && (
                 <div className="relative h-[350px] shrink-0">
                   <div className="absolute top-2 right-2 flex gap-1 z-10">
                     <button 
@@ -409,76 +821,69 @@ export default function ReviewWorkbench() {
                     className="w-full h-full border border-slate-300 rounded-lg px-4 py-3 pt-10 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 font-mono text-sm resize-none overflow-y-auto"
                   />
                 </div>
-              </div>
+              )}
 
-              <div className="flex flex-col h-full">
-                <label className="block text-sm font-medium text-slate-700 flex items-center gap-2 mb-2 shrink-0">
-                  <FileUp className="w-4 h-4 text-emerald-500" />
-                  上传文件
-                  {fileContent.trim() && (
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                      将使用此内容
-                    </span>
-                  )}
-                </label>
-                {!uploadedFile ? (
-                  <div 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="h-[350px] border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition-colors cursor-pointer group flex flex-col items-center justify-center shrink-0"
-                  >
-                    <input 
-                      type="file" 
-                      ref={fileInputRef}
-                      onChange={handleFileChange}
-                      className="hidden"
-                      accept=".md,.txt,.pdf"
-                    />
-                    <UploadCloud className="w-12 h-12 text-slate-400 mx-auto mb-4 group-hover:text-emerald-500 transition-colors" />
-                    <p className="text-sm text-slate-600 font-medium">点击此处上传文件</p>
-                    <p className="text-xs text-slate-400 mt-2">支持 .md, .txt, .pdf</p>
-                  </div>
-                ) : (
-                  <div className="h-[350px] border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col shrink-0 overflow-hidden">
-                    <div className="flex items-center justify-between mb-4 shrink-0">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-slate-500" />
-                        <span className="text-sm font-medium text-slate-700 truncate max-w-[200px]">
-                          {uploadedFile.name}
-                        </span>
-                      </div>
-                      <button 
-                        onClick={clearUploadedFile}
-                        className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0"
-                        title="移除文件"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+              {activeInputTab === 'file' && (
+                <>
+                  {!uploadedFile ? (
+                    <div 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-[350px] border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition-colors cursor-pointer group flex flex-col items-center justify-center shrink-0"
+                    >
+                      <input 
+                        type="file" 
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        className="hidden"
+                        accept=".md,.txt,.pdf"
+                      />
+                      <UploadCloud className="w-12 h-12 text-slate-400 mx-auto mb-4 group-hover:text-emerald-500 transition-colors" />
+                      <p className="text-sm text-slate-600 font-medium">点击此处上传文件</p>
+                      <p className="text-xs text-slate-400 mt-2">支持 .md, .txt, .pdf</p>
                     </div>
-                    {isReadingFile ? (
-                      <div className="flex-1 flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                  ) : (
+                    <div className="h-[350px] border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col shrink-0 overflow-hidden">
+                      <div className="flex items-center justify-between mb-4 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-slate-500" />
+                          <span className="text-sm font-medium text-slate-700 truncate max-w-[200px]">
+                            {uploadedFile.name}
+                          </span>
+                        </div>
+                        <button 
+                          onClick={clearUploadedFile}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0"
+                          title="移除文件"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
-                    ) : (
-                      <div className="flex-1 bg-white rounded p-3 border border-slate-200 overflow-y-auto min-h-0">
-                        <pre className="text-xs text-slate-600 whitespace-pre-wrap font-mono">
-                          {fileContent}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                      {isReadingFile ? (
+                        <div className="flex-1 flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 bg-white rounded p-3 border border-slate-200 overflow-y-auto min-h-0">
+                          <pre className="text-xs text-slate-600 whitespace-pre-wrap font-mono">
+                            {fileContent}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             <button 
               onClick={handleAnalyze}
-              disabled={isAnalyzing}
+              disabled={isSubmittingReview}
               className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-70 disabled:cursor-not-allowed"
             >
-              {isAnalyzing ? (
+              {isSubmittingReview ? (
                 <>
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  分析中...
+                  提交中...
                 </>
               ) : (
                 <>
@@ -489,24 +894,17 @@ export default function ReviewWorkbench() {
             </button>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  if (isAnalyzing) {
-    return (
-      <div className="h-full w-full flex items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center justify-center text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-          <h3 className="text-lg font-medium text-slate-700">正在进行检索与冲突分析...</h3>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-100">
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
+    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
+      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-140px)]">
+      {sidebarPanel}
+      <div className="flex flex-col overflow-hidden h-full min-h-0 pl-0 lg:pl-2">
+      <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-3">
             <span>需求评审任务</span>
@@ -515,17 +913,38 @@ export default function ReviewWorkbench() {
             </span>
           </h1>
           <div className="flex items-center gap-4 mt-2 text-sm text-slate-500 font-medium">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300"></span>所属模块：{selectedModule}</span>
+            <span className="flex items-center gap-1 min-w-0" title={selectedModule}>
+              <span className="w-2 h-2 rounded-full bg-slate-300 shrink-0"></span>
+              <span className="truncate">所属模块：{selectedModule}</span>
+            </span>
             <span className="text-slate-300">|</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400"></span>耗时：{processTime}s</span>
           </div>
         </div>
         <div className="flex gap-3">
+          {saveHint && (
+            <span className="inline-flex items-center text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded">
+              {saveHint}
+            </span>
+          )}
+          <button 
+            onClick={handleSaveSnapshot}
+            className="bg-white border border-slate-300 text-slate-700 px-4 py-2.5 rounded-lg font-medium hover:bg-slate-50 transition-colors"
+          >
+            保存
+          </button>
           <button 
             onClick={handleResetInput}
             className="bg-white border border-slate-300 text-slate-700 px-4 py-2.5 rounded-lg font-medium hover:bg-slate-50 transition-colors"
           >
             取消
+          </button>
+          <button 
+            onClick={handleReReview}
+            disabled={isSubmittingReview}
+            className="bg-white border border-slate-300 text-slate-700 px-4 py-2.5 rounded-lg font-medium hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            重新评审
           </button>
           <button 
             onClick={() => setIsMergeModalOpen(true)}
@@ -537,8 +956,8 @@ export default function ReviewWorkbench() {
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden p-6 gap-6">
-        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden p-6 gap-6">
+        <div className="flex-1 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
           <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 font-semibold text-slate-700 flex justify-between items-center">
             <span>原始需求文档 (只读)</span>
           </div>
@@ -547,7 +966,7 @@ export default function ReviewWorkbench() {
           </div>
         </div>
 
-        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden border-t-4 border-t-indigo-500">
+        <div className="flex-1 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden border-t-4 border-t-indigo-500">
           <div className="bg-indigo-50/50 px-5 py-3 border-b border-slate-200 font-semibold text-indigo-900 flex justify-between items-center">
             <span className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
@@ -586,14 +1005,26 @@ export default function ReviewWorkbench() {
       </div>
 
       <div className="h-64 bg-white border-t border-slate-200 flex flex-col shrink-0">
-        <div className="px-6 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-          <h3 className="font-semibold text-slate-800 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
-            冲突与规范检查报告
-            <span className="ml-2 px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-xs">
-              {conflicts.filter(c => !c.ignored).length} 项待处理
-            </span>
-          </h3>
+        <div className="px-6 py-3 border-b border-slate-100 bg-slate-50/50">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              冲突与规范检查报告
+              <span className="ml-2 px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-xs">
+                {conflicts.filter(c => !c.ignored).length} 项待处理
+              </span>
+            </h3>
+            <span className="text-xs text-slate-500">评审快照：{snapshotHistory.length}</span>
+          </div>
+          {snapshotHistory.length > 0 && (
+            <div className="mt-2 flex items-center gap-2 overflow-x-auto">
+              {snapshotHistory.map((snap: any, idx: number) => (
+                <div key={`${snap.created_at || idx}`} className="px-2 py-1 rounded-md bg-white border border-slate-200 text-xs text-slate-600 whitespace-nowrap">
+                  快照 {idx + 1} · {snap.status || 'completed'} · {snap.processing_time_sec ?? '-'}s
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-x-auto p-4 flex gap-4">
           {conflicts.length === 0 ? (
@@ -639,8 +1070,11 @@ export default function ReviewWorkbench() {
         </div>
       </div>
 
+      </div>
+      </div>
+
       {isMergeModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-8">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-8">
           <div className="bg-white w-full max-w-5xl h-full max-h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">

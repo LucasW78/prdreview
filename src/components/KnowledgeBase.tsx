@@ -48,6 +48,10 @@ export default function KnowledgeBase() {
   }, [selectedModule, searchQuery, activeTab, currentPage]);
 
   useEffect(() => {
+    loadDocuments();
+  }, []);
+
+  useEffect(() => {
     if (hasQueried) {
       loadDocuments();
     }
@@ -135,7 +139,7 @@ export default function KnowledgeBase() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 bg-slate-50">
+    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
       {showUpload && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
@@ -155,7 +159,7 @@ export default function KnowledgeBase() {
         </div>
       )}
       
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">知识库管理</h1>
@@ -239,14 +243,6 @@ export default function KnowledgeBase() {
                 <div className="col-span-full">
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                     <h3 className="text-lg font-medium text-slate-700 mb-2">查询中...</h3>
-                  </div>
-                </div>
-              ) : !hasQueried ? (
-                <div className="col-span-full">
-                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-                    <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                    <h3 className="text-lg font-medium text-slate-700 mb-2">请先点击查询</h3>
-                    <p className="text-slate-500">设置筛选条件后，点击右侧【查询】按钮加载文档</p>
                   </div>
                 </div>
               ) : documents.length === 0 ? (
@@ -357,14 +353,6 @@ export default function KnowledgeBase() {
             <div className="col-span-full">
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
                 <h3 className="text-lg font-medium text-slate-700 mb-2">查询中...</h3>
-              </div>
-            </div>
-          ) : !hasQueried ? (
-            <div className="col-span-full">
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-                <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-slate-700 mb-2">请先点击查询</h3>
-                <p className="text-slate-500">设置筛选条件后，点击右侧【查询】按钮加载文档</p>
               </div>
             </div>
           ) : documents.length === 0 ? (

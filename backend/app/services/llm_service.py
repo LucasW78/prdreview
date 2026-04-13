@@ -86,6 +86,13 @@ __HISTORICAL_CONTEXT__
 - supplementaryInfo 可为空 []
 """
 
+def get_conflict_analysis_prompt() -> str:
+    return CONFLICT_ANALYSIS_PROMPT
+
+def set_conflict_analysis_prompt(prompt: str) -> None:
+    global CONFLICT_ANALYSIS_PROMPT
+    CONFLICT_ANALYSIS_PROMPT = prompt
+
 def _escape_control_chars_in_json_string(raw: str) -> str:
     out = []
     in_string = False

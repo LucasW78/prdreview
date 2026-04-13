@@ -36,3 +36,39 @@ class ReviewResponse(BaseModel):
     conflicts: List[ConflictItem]
     supplementaryInfo: Optional[List[SupplementaryInfoItem]] = []
     processing_time_sec: float
+
+class ReviewSubmitResponse(BaseModel):
+    task_id: int
+    module: str
+    status: str
+
+class ReviewSnapshotItem(BaseModel):
+    task_id: int
+    module: str
+    status: str
+    processing_time_sec: Optional[float] = None
+    blocks: List[DocBlockItem] = []
+    conflicts: List[ConflictItem] = []
+    supplementaryInfo: Optional[List[SupplementaryInfoItem]] = []
+    created_at: Optional[str] = None
+
+class ReviewTaskStatusResponse(BaseModel):
+    task_id: int
+    module: str
+    status: str
+    origin_content: Optional[str] = None
+    document_name: Optional[str] = None
+    processing_time_sec: Optional[float] = None
+    error_message: Optional[str] = None
+    result: Optional[ReviewSnapshotItem] = None
+    snapshots: List[ReviewSnapshotItem] = []
+
+class ReviewTaskListResponse(BaseModel):
+    tasks: List[ReviewTaskStatusResponse]
+
+class SaveSnapshotRequest(BaseModel):
+    module: Optional[str] = None
+    processing_time_sec: Optional[float] = None
+    blocks: List[DocBlockItem] = []
+    conflicts: List[ConflictItem] = []
+    supplementaryInfo: Optional[List[SupplementaryInfoItem]] = []

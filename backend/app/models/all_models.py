@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Float
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -34,6 +34,11 @@ class ReviewTask(Base):
     status = Column(String, default="pending") # pending, processing, completed, failed
     origin_content = Column(Text, nullable=False)
     optimized_content = Column(Text, nullable=True)
+    result_snapshot = Column(JSON, nullable=True)
+    snapshot_history = Column(JSON, nullable=False, default=list)
+    error_message = Column(Text, nullable=True)
+    processing_time_sec = Column(Float, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     conflicts = relationship("ConflictCard", back_populates="task")

@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import ReviewWorkbench from './components/ReviewWorkbench';
 import KnowledgeBase from './components/KnowledgeBase';
 import KnowledgeChat from './components/KnowledgeChat';
+import PromptManagement from './components/PromptManagement';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -19,7 +20,7 @@ interface SourceDoc {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'workbench' | 'knowledge' | 'chat'>('workbench');
+  const [activeTab, setActiveTab] = useState<'workbench' | 'knowledge' | 'chat' | 'prompt'>('workbench');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
 
   return (
@@ -37,6 +38,9 @@ function App() {
             history={chatHistory}
             setHistory={setChatHistory}
           />
+        </div>
+        <div className={activeTab === 'prompt' ? 'h-full' : 'hidden'}>
+          <PromptManagement />
         </div>
       </main>
     </div>

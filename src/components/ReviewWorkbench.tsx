@@ -896,7 +896,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
               >
                 <div className="flex items-center gap-2">
                   <FileText className="w-4 h-4" />
-                  Markdown 输入
+                  文本输入
                 </div>
               </button>
               <button
@@ -939,7 +939,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
                     value={inputText}
                     onChange={handleInputChange}
                     onKeyDown={handleInputKeyDown}
-                    placeholder="# 需求标题&#10;## 1. 背景&#10;...在此输入需求内容..."
+                    placeholder="在此输入需求内容..."
                     className="w-full h-full border border-slate-300 rounded-lg px-4 py-3 pt-10 focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50 font-mono text-sm resize-none overflow-y-auto"
                   />
                 </div>

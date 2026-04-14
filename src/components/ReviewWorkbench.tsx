@@ -1188,7 +1188,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
                   <span className="px-2 py-1 rounded text-xs font-bold bg-indigo-100 text-indigo-700">
                     完善建议
                   </span>
-                  <span className="text-xs text-slate-500 ml-2 whitespace-nowrap truncate max-w-[180px]" title={item.title}>
+                  <span className="px-2 py-1 rounded text-xs font-bold bg-indigo-100 text-indigo-700 ml-2 whitespace-nowrap truncate max-w-[180px]" title={item.title}>
                     {item.title}
                   </span>
                 </div>

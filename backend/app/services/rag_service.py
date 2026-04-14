@@ -68,7 +68,7 @@ def ensure_collection_exists():
             if "already exists" not in str(e):
                 print(f"Warning: Failed to create collection: {e}")
 
-def process_document(content: str, module: str, filename: str) -> int:
+def process_document(content: str, module: str, filename: str, doc_type: str = "prd") -> int:
     """
     Process document content: split, embed, and upsert to Qdrant.
     Returns the number of chunks processed.
@@ -114,7 +114,8 @@ def process_document(content: str, module: str, filename: str) -> int:
             "content": doc.page_content,
             "full_text": full_text,
             "upload_time": upload_timestamp,
-            "type": "prd" 
+            "type": doc_type,
+            "doc_type": doc_type
         }
         payloads.append(payload)
         
@@ -140,7 +141,7 @@ def process_document(content: str, module: str, filename: str) -> int:
         
     return len(points)
 
-def search_similar_documents(query: str, module: str = None, limit: int = 5) -> List[Dict]:
+def search_similar_documents(query: str, module: str = None, limit: int = 5, doc_types: List[str] = None) -> List[Dict]:
     """
     Search for similar documents in Qdrant with time weighting.
     """
@@ -150,15 +151,25 @@ def search_similar_documents(query: str, module: str = None, limit: int = 5) -> 
     
     # Filter by module if specified
     search_filter = None
+    must_conditions = []
     if module:
-        search_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="module",
-                    match=models.MatchValue(value=module)
-                )
-            ]
+        must_conditions.append(
+            models.FieldCondition(
+                key="module",
+                match=models.MatchValue(value=module)
+            )
         )
+    if doc_types:
+        should_conditions = [
+            models.FieldCondition(
+                key="doc_type",
+                match=models.MatchValue(value=dt)
+            )
+            for dt in doc_types
+        ]
+        must_conditions.append(models.Filter(should=should_conditions))
+    if must_conditions:
+        search_filter = models.Filter(must=must_conditions)
     
     hits = qdrant_client.search(
         collection_name=COLLECTION_NAME,
@@ -191,6 +202,7 @@ def search_similar_documents(query: str, module: str = None, limit: int = 5) -> 
             "header_path": payload.get("header_path"),
             "filename": payload.get("filename"),
             "module": payload.get("module", "未知模块"),
+            "doc_type": payload.get("doc_type", payload.get("type", "prd")),
             "time_weight": time_weight
         })
         

@@ -6,7 +6,6 @@ from app.schemas.chat_schemas import ChatRequest, ChatResponse, SourceDoc
 from app.services.rag_service import search_similar_documents
 from app.services.llm_service import answer_question_async, rewrite_query, build_history_context
 from app.core.permissions import get_permission_context, PermissionContext, ensure_module_access
-import time
 
 router = APIRouter()
 
@@ -61,11 +60,8 @@ async def ask_question(
             ensure_module_access(ctx, request.module)
             target_module = request.module
         
-        # 记录检索时间
-        start_time = time.time()
-        retrieved_docs = search_similar_documents(search_query, target_module, limit=5)
+        retrieved_docs = search_similar_documents(search_query, target_module, limit=6, doc_types=["sop", "prd"])
         retrieved_docs = _rerank_by_query_focus(search_query, retrieved_docs, keep=4)
-        print(f"RAG search took {time.time() - start_time:.2f}s, found {len(retrieved_docs)} docs")
 
         # 2. 调用大模型生成回答
         answer = await answer_question_async(request.query, retrieved_docs, context_history)
@@ -80,10 +76,13 @@ async def ask_question(
                     continue
                 seen.add(key)
                 sources.append(SourceDoc(
+                    source_id=f"S{len(sources)+1}",
                     filename=doc.get("filename", "未知文件"),
+                    header_path=doc.get("header_path", ""),
                     content=doc.get("content", ""),
                     score=doc.get("score", 0.0),
-                    module=doc.get("module", "未知模块")
+                    module=doc.get("module", "未知模块"),
+                    doc_type=doc.get("doc_type", "prd")
                 ))
 
         return ChatResponse(
@@ -91,6 +90,7 @@ async def ask_question(
             sources=sources
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error processing chat request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate answer: {str(e)}")

@@ -73,7 +73,7 @@ export default function PromptManagement() {
             </button>
           </div>
         </div>
-        <p className="text-sm text-slate-500 shrink-0">回显评审工作台系统提示词，支持编辑后应用。</p>
+        <p className="text-sm text-slate-500 shrink-0">评审工作台系统提示词，支持编辑后应用。</p>
         <textarea
           value={draftPrompt}
           onChange={(e) => setDraftPrompt(e.target.value)}

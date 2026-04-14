@@ -27,6 +27,7 @@ export default function DataIngestion() {
         if (res.data && res.data.modules) {
           setModules(res.data.modules);
           setSelectedModule(res.data.modules[0]);
+          setSopSelectedModule(res.data.modules[0]);
         }
       })
       .catch(err => console.error("Failed to fetch modules:", err));

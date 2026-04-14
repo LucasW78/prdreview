@@ -79,7 +79,7 @@ export default function PermissionManagement() {
         </div>
 
         <div className="border border-slate-200 rounded-xl p-4 space-y-3">
-          <h2 className="text-sm font-semibold text-slate-800">超级管理员名单（邮箱）</h2>
+          <h2 className="text-sm font-semibold text-slate-800">超级管理员名单</h2>
           <div className="space-y-2">
             {superAdmins.map((email, idx) => (
               <div key={`${idx}-${email}`} className="flex items-center gap-2">
@@ -105,7 +105,7 @@ export default function PermissionManagement() {
         </div>
 
         <div className="border border-slate-200 rounded-xl p-4 space-y-3">
-          <h2 className="text-sm font-semibold text-slate-800">业务线名单（模块 -&gt; 邮箱）</h2>
+          <h2 className="text-sm font-semibold text-slate-800">业务线名单</h2>
           <div className="space-y-3">
             {sortedModules.map((module) => (
               <div key={module} className="border border-slate-200 rounded-lg p-3 space-y-2">

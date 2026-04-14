@@ -19,6 +19,7 @@
 - PRD / SOP 双 Tab 管理
 - 上传、分页查询、预览、删除
 - 按模块和关键词检索历史文档
+- 入库按 `module + doc_type + content_hash` 去重，避免 SOP/PRD 互相误判重复
 
 ### 智能问答
 - 基于知识库检索后回答问题
@@ -26,11 +27,17 @@
 - 支持新建会话、重命名、删除、清空全部、刷新后本地持久化
 - 支持中断请求、AI 回复重新生成
 - 当回答无知识依据时自动隐藏参考来源
+- 支持证据引用编号（如 `[S1]`）与来源卡片联动展示
 
 ### 提示词管理
 - 独立侧边栏模块入口
 - 回显“评审工作台”系统提示词
 - 支持编辑、重置与一键应用
+
+### 权限管理
+- 超级管理员：全页面全功能
+- 业务线角色：仅知识库上传/查询，且仅可访问所属模块
+- 支持在线维护权限配置（超级管理员名单、业务线名单）
 
 ## 技术栈
 
@@ -65,6 +72,8 @@ POSTGRES_DB=rag_expert
 QDRANT_URL=http://qdrant:6333
 DASHSCOPE_API_KEY=your_dashscope_api_key
 SECRET_KEY=change_me
+SUPER_ADMIN_EMAILS=admin@company.com,cto@company.com
+BUSINESS_LINE_MEMBERS={"支付模块":["pay1@company.com"],"任务调度":["ops1@company.com"]}
 ```
 
 ### 3) 启动后端基础服务
@@ -105,11 +114,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `DELETE /api/v1/review/tasks/{task_id}`：删除评审任务
 - `GET /api/v1/review/system-prompt`：获取评审系统提示词
 - `PUT /api/v1/review/system-prompt`：更新评审系统提示词
+- `GET /api/v1/review/analysis-parse-failures`：查询评审解析失败日志
 - `POST /api/v1/ingestion/upload`：上传文档入库
 - `GET /api/v1/ingestion/history`：知识库分页查询
 - `GET /api/v1/ingestion/document/{id}`：文档内容预览
 - `DELETE /api/v1/ingestion/document/{id}`：删除文档
 - `POST /api/v1/chat/ask`：检索增强问答
+- `GET /api/v1/auth/permissions`：获取当前用户权限
+- `GET /api/v1/auth/permission-config`：获取权限配置（仅超管）
+- `PUT /api/v1/auth/permission-config`：更新权限配置（仅超管）
 
 ## 目录结构
 
@@ -153,7 +166,7 @@ backend/
 
 ## 版本说明
 
-- `v0.1.2` 更新内容见 [更新说明.md](./更新说明.md)
+- `v0.1.3` 更新内容见 [更新说明.md](./更新说明.md)
 
 ## License
 

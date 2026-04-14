@@ -28,26 +28,33 @@ async def upload_document(
     """
     Upload a PRD or SOP document, process it, and ingest into Qdrant.
     """
-    print(f"Received upload request: file={file.filename}, module={module}, doc_type={doc_type}")
     ensure_module_access(ctx, module)
     if not file.filename.endswith(('.md', '.txt')):
         raise HTTPException(status_code=400, detail="Currently only .md and .txt files are supported for MVP.")
     
     # Read content
     content = await file.read()
-    text_content = content.decode('utf-8')
-    print(f"File read successfully, size={len(text_content)} chars")
+    try:
+        text_content = content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            text_content = content.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=422, detail="文件编码不受支持，请使用 UTF-8 编码后重试。")
     
     # Calculate hash to prevent exact duplicates (simple version)
     content_hash = hashlib.md5(content).hexdigest()
     
-    # Check if already exists
+    # Check if already exists (same hash + same module + same doc_type)
+    # NOTE: SOP/PRD can share content; dedupe must not跨类型误判
     result = await db.execute(
-        select(DocumentMetadata).filter(DocumentMetadata.content_hash == content_hash)
+        select(DocumentMetadata)
+        .where(DocumentMetadata.content_hash == content_hash)
+        .where(DocumentMetadata.module == module)
+        .where(DocumentMetadata.doc_type == doc_type)
     )
     existing_doc = result.scalars().first()
     if existing_doc:
-        print(f"Duplicate document found: {file.filename}")
         return UploadResponse(
             message="Document already exists (skipped re-processing)",
             document_id=existing_doc.id,
@@ -58,17 +65,10 @@ async def upload_document(
     file_path = os.path.join(UPLOAD_DIR, f"{content_hash}_{file.filename}")
     with open(file_path, "wb") as f:
         f.write(content)
-    print(f"File saved locally to {file_path}")
-
     # Process and Ingest to Vector DB
     try:
-        print("Starting process_document...")
-        chunks_count = process_document(text_content, module, file.filename)
-        print(f"process_document completed, chunks={chunks_count}")
+        chunks_count = process_document(text_content, module, file.filename, doc_type=doc_type)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error in process_document: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
 
     # Update old versions to not latest
@@ -91,7 +91,6 @@ async def upload_document(
     db.add(new_doc)
     await db.commit()
     await db.refresh(new_doc)
-    print("Metadata saved to DB")
 
     return UploadResponse(
         message="Document uploaded and processed successfully",

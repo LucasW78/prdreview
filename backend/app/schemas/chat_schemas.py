@@ -12,10 +12,13 @@ class ChatRequest(BaseModel):
 
 class SourceDoc(BaseModel):
     id: Optional[int] = None
+    source_id: Optional[str] = None
     filename: str
+    header_path: Optional[str] = None
     content: str
     score: float
     module: str
+    doc_type: Optional[str] = None
 
 class ChatResponse(BaseModel):
     answer: str

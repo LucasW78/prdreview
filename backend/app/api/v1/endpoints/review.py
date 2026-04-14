@@ -5,7 +5,7 @@ import hashlib
 import re
 import asyncio
 from datetime import datetime
-from typing import List
+from typing import List, Dict
 from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -31,6 +31,8 @@ from app.core.permissions import ensure_super_admin
 router = APIRouter(dependencies=[Depends(ensure_super_admin)])
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+RUNTIME_LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../runtime_logs"))
+ANALYSIS_PARSE_LOG_FILE = os.path.join(RUNTIME_LOG_DIR, "analysis_parse_failures.jsonl")
 
 def _extract_requirement_title(content: str) -> str:
     lines = content.splitlines()
@@ -66,6 +68,47 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
         size += ch_bytes
     return "".join(out)
 
+def _build_review_queries(content: str) -> List[str]:
+    text = (content or "").strip()
+    if not text:
+        return []
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    queries: List[str] = []
+    # Probe 1: full context (bounded) for holistic retrieval
+    queries.append(text[:3000])
+    # Probe 2: title / first heading
+    heading = next((ln.lstrip("# ").strip() for ln in lines if ln.startswith("#")), "")
+    if heading:
+        queries.append(heading)
+    # Probe 3: conflict-prone rule lines
+    conflict_keywords = ("必须", "强制", "覆盖", "不得", "禁止", "应当", "建议", "可选")
+    rule_lines = [ln for ln in lines if any(k in ln for k in conflict_keywords)]
+    if rule_lines:
+        queries.append("\n".join(rule_lines[:10])[:2000])
+    # Probe 4: top section summary
+    if lines:
+        queries.append("\n".join(lines[:12])[:2000])
+    # Keep order and dedupe
+    seen = set()
+    out: List[str] = []
+    for q in queries:
+        qq = q.strip()
+        if not qq or qq in seen:
+            continue
+        seen.add(qq)
+        out.append(qq)
+    return out[:4]
+
+def _merge_retrieved_docs(docs: List[Dict], keep: int) -> List[Dict]:
+    merged: Dict[str, Dict] = {}
+    for d in docs:
+        key = f"{d.get('filename','')}|{d.get('header_path','')}|{d.get('doc_type','')}|{d.get('module','')}"
+        if key not in merged or (d.get("score", 0.0) > merged[key].get("score", 0.0)):
+            merged[key] = d
+    out = list(merged.values())
+    out.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    return out[:keep]
+
 def _to_snapshot_item(snapshot: dict, task: ReviewTask) -> ReviewSnapshotItem:
     return ReviewSnapshotItem(
         task_id=snapshot.get("task_id", task.id),
@@ -99,7 +142,7 @@ def _to_task_status_response(task: ReviewTask, include_snapshots: bool = True) -
 async def _run_merge_index_async(task_id: int, final_content: str, module: str, filename: str, file_path: str, content_hash: str):
     async with AsyncSessionLocal() as db:
         try:
-            chunks_count = await asyncio.to_thread(process_document, final_content, module, filename)
+            chunks_count = await asyncio.to_thread(process_document, final_content, module, filename, "prd")
             await db.execute(
                 DocumentMetadata.__table__.update()
                 .where(DocumentMetadata.module == module)
@@ -108,7 +151,10 @@ async def _run_merge_index_async(task_id: int, final_content: str, module: str, 
                 .values(is_latest=False)
             )
             existing_result = await db.execute(
-                select(DocumentMetadata).filter(DocumentMetadata.content_hash == content_hash)
+                select(DocumentMetadata)
+                .where(DocumentMetadata.content_hash == content_hash)
+                .where(DocumentMetadata.module == module)
+                .where(DocumentMetadata.doc_type == "prd")
             )
             existing_doc = existing_result.scalars().first()
             if not existing_doc:
@@ -147,11 +193,30 @@ async def _run_review_task_async(task_id: int, module: str, content: str):
 
         start_time = time.time()
         try:
-            retrieved_docs = search_similar_documents(
-                query=content,
-                module=module,
-                limit=5
-            )
+            # Multi-probe retrieval: title/rule lines/full context to improve conflict recall.
+            query_probes = _build_review_queries(content)
+            sop_candidates: List[Dict] = []
+            prd_candidates: List[Dict] = []
+            for q in query_probes:
+                sop_candidates.extend(
+                    search_similar_documents(
+                        query=q,
+                        module=module,
+                        limit=6,
+                        doc_types=["sop"]
+                    )
+                )
+                prd_candidates.extend(
+                    search_similar_documents(
+                        query=q,
+                        module=module,
+                        limit=3,
+                        doc_types=["prd"]
+                    )
+                )
+            retrieved_sop = _merge_retrieved_docs(sop_candidates, keep=10)
+            retrieved_prd = _merge_retrieved_docs(prd_candidates, keep=6)
+            retrieved_docs = retrieved_sop + retrieved_prd
 
             analysis_result = await analyze_conflicts(
                 module=module,
@@ -362,6 +427,35 @@ async def update_review_system_prompt(payload: dict = Body(...)):
     set_conflict_analysis_prompt(prompt)
     return {"message": "系统提示词已更新", "prompt": prompt}
 
+@router.get("/analysis-parse-failures")
+async def get_analysis_parse_failures(
+    limit: int = Query(50, ge=1, le=500),
+    keyword: str = Query("", description="按模块/内容关键字过滤")
+):
+    if not os.path.exists(ANALYSIS_PARSE_LOG_FILE):
+        return {"items": [], "total": 0}
+    items: List[dict] = []
+    kw = (keyword or "").strip().lower()
+    try:
+        with open(ANALYSIS_PARSE_LOG_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if kw:
+                    text = f"{rec.get('module','')} {rec.get('content_preview','')} {rec.get('raw_response_preview','')}".lower()
+                    if kw not in text:
+                        continue
+                items.append(rec)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"read parse failure logs failed: {str(e)}")
+    items = list(reversed(items))[:limit]
+    return {"items": items, "total": len(items)}
+
 @router.post("/merge/{task_id}")
 async def merge_confirmation(
     task_id: int,
@@ -390,7 +484,10 @@ async def merge_confirmation(
         content_bytes = final_content.encode("utf-8")
         content_hash = hashlib.md5(content_bytes).hexdigest()
         existing_result = await db.execute(
-            select(DocumentMetadata).filter(DocumentMetadata.content_hash == content_hash)
+            select(DocumentMetadata)
+            .where(DocumentMetadata.content_hash == content_hash)
+            .where(DocumentMetadata.module == task.module)
+            .where(DocumentMetadata.doc_type == "prd")
         )
         existing_doc = existing_result.scalars().first()
         if existing_doc:

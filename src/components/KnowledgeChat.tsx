@@ -5,10 +5,13 @@ import { chatApi, ingestionApi } from '../api';
 
 interface SourceDoc {
   id?: number;
+  source_id?: string;
   filename: string;
+  header_path?: string;
   content: string;
   score: number;
   module: string;
+  doc_type?: string;
 }
 
 interface Message {
@@ -53,11 +56,49 @@ const shouldShowSources = (msg: Message) => {
   return !noEvidenceSignals.some((s) => text.includes(s));
 };
 
+const CITATION_REGEX = /\[(S\d+)\]/gi;
+
+const normalizeSourceId = (src: SourceDoc, index: number) => (src.source_id || `S${index + 1}`).toUpperCase();
+
+const extractCitationIds = (text: string) => {
+  const ids = new Set<string>();
+  if (!text) return ids;
+  let match: RegExpExecArray | null;
+  while ((match = CITATION_REGEX.exec(text)) !== null) {
+    if (match[1]) ids.add(match[1].toUpperCase());
+  }
+  return ids;
+};
+
+const buildEvidenceItems = (answer: string) => {
+  const lines = (answer || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== '```');
+
+  const items: { text: string; refs: string[] }[] = [];
+  for (const line of lines) {
+    const refs = Array.from(extractCitationIds(line));
+    if (refs.length === 0) continue;
+    const cleaned = line
+      .replace(CITATION_REGEX, '')
+      .replace(/^[-*\d.\s]+/, '')
+      .trim();
+    if (!cleaned) continue;
+    items.push({ text: cleaned, refs });
+  }
+  return items.slice(0, 10);
+};
+
 const dedupeSources = (sources: SourceDoc[]) =>
   sources.reduce((acc, src) => {
-    const existing = acc.find((s) => s.filename === src.filename);
+    const key = `${(src.source_id || '').toUpperCase()}|${src.filename}|${src.header_path || ''}`;
+    const existing = acc.find((s) => `${(s.source_id || '').toUpperCase()}|${s.filename}|${s.header_path || ''}` === key);
     if (!existing || src.score > existing.score) {
-      return [...acc.filter((s) => s.filename !== src.filename), src];
+      return [
+        ...acc.filter((s) => `${(s.source_id || '').toUpperCase()}|${s.filename}|${s.header_path || ''}` !== key),
+        src
+      ];
     }
     return acc;
   }, [] as SourceDoc[]);
@@ -118,6 +159,16 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
     () => (msg.sources && msg.sources.length > 0 ? dedupeSources(msg.sources) : []),
     [msg.sources]
   );
+  const sourceMap = useMemo(() => {
+    const map = new Map<string, SourceDoc>();
+    uniqueSources.forEach((src, idx) => {
+      map.set(normalizeSourceId(src, idx), src);
+    });
+    return map;
+  }, [uniqueSources]);
+  const citedIds = useMemo(() => extractCitationIds(msg.content || ''), [msg.content]);
+  const evidenceItems = useMemo(() => buildEvidenceItems(msg.content || ''), [msg.content]);
+
   return (
     <div className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
       <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
@@ -137,18 +188,57 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
 
         {shouldShowSources(msg) && uniqueSources.length > 0 && (
           <div className="mt-2 w-full">
+            <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+              <p className="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-1">
+                <Search className="w-3 h-3" />
+                证据映射
+              </p>
+              {evidenceItems.length > 0 ? (
+                <div className="space-y-2">
+                  {evidenceItems.map((item, idx) => (
+                    <div key={`${idx}-${item.text}`} className="rounded-md bg-white border border-indigo-100 px-3 py-2">
+                      <p className="text-xs text-slate-700">{item.text}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {item.refs.map((ref) => {
+                          const src = sourceMap.get(ref);
+                          return (
+                            <span key={`${idx}-${ref}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[11px]">
+                              {ref}
+                              <span className="text-indigo-600/80">{src?.filename || '未匹配来源'}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-amber-700">当前回答未标注证据编号，建议重新生成以获得可追溯回答。</p>
+              )}
+            </div>
+
             <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1">
               <Search className="w-3 h-3" />
               参考来源 ({uniqueSources.length})
             </p>
             <div className="flex flex-wrap gap-2">
-              {uniqueSources.map((src, sIdx) => (
+              {uniqueSources.map((src, sIdx) => {
+                const sid = normalizeSourceId(src, sIdx);
+                const cited = citedIds.has(sid);
+                return (
                 <div
-                  key={`${src.filename}-${sIdx}`}
-                  className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700 cursor-pointer transition-colors shadow-sm"
+                  key={`${src.filename}-${sIdx}-${sid}`}
+                  className={`group relative flex items-center gap-1.5 px-3 py-1.5 bg-white border rounded-lg text-xs cursor-pointer transition-colors shadow-sm ${
+                    cited
+                      ? 'border-indigo-400 text-indigo-700'
+                      : 'border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-700'
+                  }`}
                 >
                   <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
+                  <span className="text-indigo-500">{sid}</span>
                   <span className="font-medium max-w-[150px] truncate">{src.filename}</span>
+                  <span className="text-slate-400">·</span>
+                  <span className="text-slate-400">{src.doc_type?.toUpperCase() || 'PRD'}</span>
                   <span className="text-slate-400">·</span>
                   <span className="text-slate-400">{(src.score * 100).toFixed(0)}%</span>
 
@@ -157,11 +247,13 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
                       <p className="font-semibold text-white">{src.filename}</p>
                       <span className="text-indigo-400 text-[10px]">匹配度: {(src.score * 100).toFixed(1)}%</span>
                     </div>
+                    <p className="text-slate-400 mb-2">章节：{src.header_path || '未分段'}</p>
                     <p className="text-slate-300 leading-relaxed line-clamp-8">{src.content}</p>
                     <div className="absolute -bottom-1 left-4 w-2 h-2 bg-slate-800 transform rotate-45"></div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

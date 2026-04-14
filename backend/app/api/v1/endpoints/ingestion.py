@@ -149,11 +149,10 @@ async def get_upload_history(
     page_size = 6
     offset = (page - 1) * page_size
     stmt = stmt.offset(offset).limit(page_size)
-
     result = await db.execute(stmt)
-    documents = result.scalars().all()
+    paged_documents = result.scalars().all()
     return {
-        "documents": documents,
+        "documents": paged_documents,
         "total": total,
         "page": page,
         "page_size": page_size,

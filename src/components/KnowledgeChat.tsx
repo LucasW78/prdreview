@@ -70,26 +70,6 @@ const extractCitationIds = (text: string) => {
   return ids;
 };
 
-const buildEvidenceItems = (answer: string) => {
-  const lines = (answer || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && line !== '```');
-
-  const items: { text: string; refs: string[] }[] = [];
-  for (const line of lines) {
-    const refs = Array.from(extractCitationIds(line));
-    if (refs.length === 0) continue;
-    const cleaned = line
-      .replace(CITATION_REGEX, '')
-      .replace(/^[-*\d.\s]+/, '')
-      .trim();
-    if (!cleaned) continue;
-    items.push({ text: cleaned, refs });
-  }
-  return items.slice(0, 10);
-};
-
 const dedupeSources = (sources: SourceDoc[]) =>
   sources.reduce((acc, src) => {
     const key = `${(src.source_id || '').toUpperCase()}|${src.filename}|${src.header_path || ''}`;
@@ -167,7 +147,11 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
     return map;
   }, [uniqueSources]);
   const citedIds = useMemo(() => extractCitationIds(msg.content || ''), [msg.content]);
-  const evidenceItems = useMemo(() => buildEvidenceItems(msg.content || ''), [msg.content]);
+  const displayedSources = useMemo(() => {
+    const withSid = uniqueSources.map((src, sIdx) => ({ src, sid: normalizeSourceId(src, sIdx) }));
+    if (citedIds.size === 0) return withSid;
+    return withSid.filter((item) => citedIds.has(item.sid));
+  }, [uniqueSources, citedIds]);
 
   return (
     <div className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
@@ -186,44 +170,14 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
           {msg.content}
         </div>
 
-        {shouldShowSources(msg) && uniqueSources.length > 0 && (
+        {shouldShowSources(msg) && displayedSources.length > 0 && (
           <div className="mt-2 w-full">
-            <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
-              <p className="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-1">
-                <Search className="w-3 h-3" />
-                证据映射
-              </p>
-              {evidenceItems.length > 0 ? (
-                <div className="space-y-2">
-                  {evidenceItems.map((item, idx) => (
-                    <div key={`${idx}-${item.text}`} className="rounded-md bg-white border border-indigo-100 px-3 py-2">
-                      <p className="text-xs text-slate-700">{item.text}</p>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {item.refs.map((ref) => {
-                          const src = sourceMap.get(ref);
-                          return (
-                            <span key={`${idx}-${ref}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[11px]">
-                              {ref}
-                              <span className="text-indigo-600/80">{src?.filename || '未匹配来源'}</span>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-amber-700">当前回答未标注证据编号，建议重新生成以获得可追溯回答。</p>
-              )}
-            </div>
-
             <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1">
               <Search className="w-3 h-3" />
-              参考来源 ({uniqueSources.length})
+              参考来源 ({displayedSources.length})
             </p>
             <div className="flex flex-wrap gap-2">
-              {uniqueSources.map((src, sIdx) => {
-                const sid = normalizeSourceId(src, sIdx);
+              {displayedSources.map(({ src, sid }, sIdx) => {
                 const cited = citedIds.has(sid);
                 return (
                 <div

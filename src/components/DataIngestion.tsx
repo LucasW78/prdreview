@@ -3,7 +3,11 @@ import { UploadCloud, FileText, BookOpen, CheckCircle2, AlertCircle } from 'luci
 import { useState, useRef, useEffect } from 'react';
 import { ingestionApi } from '../api';
 
-export default function DataIngestion() {
+interface DataIngestionProps {
+  onUploaded?: (payload: { docType: 'prd' | 'sop'; module: string }) => void;
+}
+
+export default function DataIngestion({ onUploaded }: DataIngestionProps) {
   const [modules, setModules] = useState<string[]>(['支付模块', '任务调度', '用户中心']);
   
   const [prdUploading, setPrdUploading] = useState(false);
@@ -69,9 +73,14 @@ export default function DataIngestion() {
       console.log("PRD Upload response:", response);
       
       if (response.status === 200) {
+        const message = String(response.data?.message || '');
+        if (message.toLowerCase().includes('already exists')) {
+          setPrdError('文档已存在，已跳过去重入库。');
+        }
         setPrdUploaded(true);
         setSelectedFile(null);
         if (prdFileInputRef.current) prdFileInputRef.current.value = '';
+        onUploaded?.({ docType: 'prd', module: selectedModule });
         setTimeout(() => setPrdUploaded(false), 3000);
       } else {
         throw new Error("Upload failed with status " + response.status);
@@ -115,9 +124,14 @@ export default function DataIngestion() {
       console.log("SOP Upload response:", response);
       
       if (response.status === 200) {
+        const message = String(response.data?.message || '');
+        if (message.toLowerCase().includes('already exists')) {
+          setSopError('文档已存在，已跳过去重入库。');
+        }
         setSopUploaded(true);
         setSopSelectedFile(null);
         if (sopFileInputRef.current) sopFileInputRef.current.value = '';
+        onUploaded?.({ docType: 'sop', module: sopSelectedModule });
         setTimeout(() => setSopUploaded(false), 3000);
       } else {
         throw new Error("Upload failed with status " + response.status);

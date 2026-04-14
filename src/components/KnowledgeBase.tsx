@@ -128,8 +128,16 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
       const response = await ingestionApi.getDocumentContent(doc.id);
       if (response.data && response.data.content) {
         setPreviewContent(response.data.content);
+      } else {
+        setPreviewContent('文档内容为空。');
       }
-    } catch (err) {
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 404) {
+        setPreviewContent('文档不存在或文件已被清理，已自动刷新列表。');
+        loadDocuments();
+        return;
+      }
       console.error('Failed to load document content:', err);
       setPreviewContent('加载文档内容失败，请稍后重试。');
     }
@@ -185,6 +193,17 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
     }
   };
 
+  const handleUploaded = ({ docType, module }: { docType: 'prd' | 'sop'; module: string }) => {
+    setShowUpload(false);
+    setActiveTab(docType);
+    setSelectedModule(module || '全部');
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+      return;
+    }
+    loadDocuments();
+  };
+
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
       {showUpload && (
@@ -200,7 +219,7 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
               </button>
             </div>
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
-              <DataIngestion />
+              <DataIngestion onUploaded={handleUploaded} />
             </div>
           </div>
         </div>

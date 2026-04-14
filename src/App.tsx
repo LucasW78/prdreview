@@ -5,39 +5,30 @@ import KnowledgeBase from './components/KnowledgeBase';
 import KnowledgeChat from './components/KnowledgeChat';
 import PromptManagement from './components/PromptManagement';
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  sources?: SourceDoc[];
-}
-
-interface SourceDoc {
-  id?: number;
-  filename: string;
-  content: string;
-  score: number;
-  module: string;
-}
-
 function App() {
   const [activeTab, setActiveTab] = useState<'workbench' | 'knowledge' | 'chat' | 'prompt'>('workbench');
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [knowledgeFocus, setKnowledgeFocus] = useState<{ module: string | null; key: number }>({
+    module: null,
+    key: 0
+  });
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
       <main className="flex-1 overflow-hidden flex flex-col">
         <div className={activeTab === 'workbench' ? 'h-full' : 'hidden'}>
-          <ReviewWorkbench />
+          <ReviewWorkbench
+            onNavigateKnowledge={(module?: string) => {
+              setKnowledgeFocus({ module: module || '全部', key: Date.now() });
+              setActiveTab('knowledge');
+            }}
+          />
         </div>
         <div className={activeTab === 'knowledge' ? 'h-full' : 'hidden'}>
-          <KnowledgeBase />
+          <KnowledgeBase focusModule={knowledgeFocus.module} focusKey={knowledgeFocus.key} />
         </div>
         <div className={activeTab === 'chat' ? 'h-full' : 'hidden'}>
-          <KnowledgeChat
-            history={chatHistory}
-            setHistory={setChatHistory}
-          />
+          <KnowledgeChat />
         </div>
         <div className={activeTab === 'prompt' ? 'h-full' : 'hidden'}>
           <PromptManagement />

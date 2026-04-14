@@ -6,7 +6,11 @@ import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
-export default function ReviewWorkbench() {
+interface ReviewWorkbenchProps {
+  onNavigateKnowledge?: (module?: string) => void;
+}
+
+export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbenchProps) {
   const [blocks, setBlocks] = useState<DocBlock[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
@@ -33,6 +37,13 @@ export default function ReviewWorkbench() {
   const [saveHint, setSaveHint] = useState<string>('');
   const [reviewJobs, setReviewJobs] = useState<any[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null);
+  const [mergeResultModal, setMergeResultModal] = useState<{
+    open: boolean;
+    success: boolean;
+    message: string;
+    module?: string;
+    canView?: boolean;
+  }>({ open: false, success: false, message: '' });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollingTimerRef = useRef<number | null>(null);
@@ -685,7 +696,13 @@ export default function ReviewWorkbench() {
       setIsMergeModalOpen(false);
       const mergeMsg = response.data?.message || 'Merge 成功！文档已归档。';
       const indexingErr = response.data?.indexing_error;
-      alert(indexingErr ? `${mergeMsg}\n${indexingErr}` : mergeMsg);
+      setMergeResultModal({
+        open: true,
+        success: true,
+        message: indexingErr ? `${mergeMsg}\n${indexingErr}` : mergeMsg,
+        module: selectedModule,
+        canView: true
+      });
       setReviewJobs((prev) => prev.filter((job) => job.taskId !== taskId));
       setActiveTaskId(null);
       setSnapshotHistory([]);
@@ -698,7 +715,12 @@ export default function ReviewWorkbench() {
     } catch (err: any) {
       console.error(err);
       const detail = err?.response?.data?.detail || err?.message || '未知错误';
-      alert(`Merge 失败：${detail}`);
+      setMergeResultModal({
+        open: true,
+        success: false,
+        message: `Merge 失败：${detail}`,
+        canView: false
+      });
     }
   };
 
@@ -731,6 +753,44 @@ export default function ReviewWorkbench() {
       alert(err?.response?.data?.detail || '快照保存失败');
     }
   }, [taskId, activeTaskId, selectedModule, processTime, blocks, conflicts, mapTaskToJob]);
+
+  const renderMergeResultModal = () => {
+    if (!mergeResultModal.open) return null;
+    return (
+      <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/35 p-4">
+        <div className="bg-white w-full max-w-sm rounded-xl shadow-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
+            <h3 className={`text-base font-semibold ${mergeResultModal.success ? 'text-emerald-700' : 'text-red-700'}`}>
+              {mergeResultModal.success ? 'Merge 成功' : 'Merge 失败'}
+            </h3>
+          </div>
+          <div className="px-4 py-3">
+            <p className="text-xs text-slate-700 whitespace-pre-wrap leading-5">{mergeResultModal.message}</p>
+          </div>
+          <div className="px-4 py-3 border-t border-slate-200 bg-white flex justify-end gap-2">
+            {mergeResultModal.success && mergeResultModal.canView && (
+              <button
+                onClick={() => {
+                  const module = mergeResultModal.module || selectedModule;
+                  setMergeResultModal({ open: false, success: false, message: '' });
+                  onNavigateKnowledge?.(module);
+                }}
+                className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-700 transition-colors"
+              >
+                查看
+              </button>
+            )}
+            <button
+              onClick={() => setMergeResultModal({ open: false, success: false, message: '' })}
+              className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-sm hover:bg-slate-50 transition-colors"
+            >
+              确定
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   if (blocks.length === 0) {
     return (
@@ -895,6 +955,7 @@ export default function ReviewWorkbench() {
           </div>
         </div>
         </div>
+        {renderMergeResultModal()}
       </div>
     );
   }
@@ -1112,6 +1173,8 @@ export default function ReviewWorkbench() {
           </div>
         </div>
       )}
+
+      {renderMergeResultModal()}
     </div>
   );
 }

@@ -8,6 +8,19 @@ import time
 
 router = APIRouter()
 
+NO_EVIDENCE_PATTERNS = [
+    "未检索到直接依据",
+    "知识库中未提供相关依据",
+    "根据现有知识库内容，我无法回答这个问题",
+    "无法回答这个问题",
+]
+
+def _should_hide_sources(answer: str) -> bool:
+    text = (answer or "").strip()
+    if not text:
+        return True
+    return any(p in text for p in NO_EVIDENCE_PATTERNS)
+
 def _rerank_by_query_focus(query: str, docs: list[dict], keep: int = 4) -> list[dict]:
     tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fa5]{2,}", query or "")]
     if not tokens:
@@ -46,20 +59,21 @@ async def ask_question(request: ChatRequest) -> Any:
         # 2. 调用大模型生成回答
         answer = answer_question(request.query, retrieved_docs, context_history)
 
-        # 3. 组装响应数据
+        # 3. 组装响应数据：若回答判定“无直接依据”，不返回参考来源
         sources = []
-        seen = set()
-        for doc in retrieved_docs:
-            key = (doc.get("filename"), doc.get("header_path"))
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append(SourceDoc(
-                filename=doc.get("filename", "未知文件"),
-                content=doc.get("content", ""),
-                score=doc.get("score", 0.0),
-                module=doc.get("module", "未知模块")
-            ))
+        if not _should_hide_sources(answer):
+            seen = set()
+            for doc in retrieved_docs:
+                key = (doc.get("filename"), doc.get("header_path"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                sources.append(SourceDoc(
+                    filename=doc.get("filename", "未知文件"),
+                    content=doc.get("content", ""),
+                    score=doc.get("score", 0.0),
+                    module=doc.get("module", "未知模块")
+                ))
 
         return ChatResponse(
             answer=answer,

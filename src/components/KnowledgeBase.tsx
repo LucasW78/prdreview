@@ -4,7 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { ingestionApi } from '../api';
 import DataIngestion from './DataIngestion';
 
-export default function KnowledgeBase() {
+interface KnowledgeBaseProps {
+  focusModule?: string | null;
+  focusKey?: number;
+}
+
+export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: KnowledgeBaseProps) {
   const [modules, setModules] = useState<string[]>(['支付模块', '任务调度', '用户中心']);
   const [selectedModule, setSelectedModule] = useState<string>('全部');
   const [documents, setDocuments] = useState<any[]>([]);
@@ -81,6 +86,19 @@ export default function KnowledgeBase() {
       })
       .catch(err => console.error(err));
   }, []);
+
+  useEffect(() => {
+    if (!focusModule) return;
+    if (focusModule === '全部' || modules.includes(focusModule)) {
+      setActiveTab('prd');
+      setSelectedModule(focusModule);
+      if (currentPage !== 1) {
+        setCurrentPage(1);
+      } else {
+        loadDocuments();
+      }
+    }
+  }, [focusModule, focusKey, modules]);
 
   const handlePreview = async (doc: any) => {
     setPreviewDoc(doc);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { AlertTriangle, CheckCircle, Info, GitMerge, X, Maximize2, Play, FileText, UploadCloud, Trash2, FileUp } from 'lucide-react';
-import { Conflict, DocBlock } from '../types';
+import { AlertTriangle, CheckCircle, GitMerge, X, Maximize2, Play, FileText, UploadCloud, Trash2, FileUp } from 'lucide-react';
+import { Conflict, DocBlock, SupplementaryInfo } from '../types';
 import { reviewApi, ingestionApi } from '../api';
 
 interface ReviewWorkbenchProps {
@@ -10,6 +10,7 @@ interface ReviewWorkbenchProps {
 export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbenchProps) {
   const [blocks, setBlocks] = useState<DocBlock[]>([]);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const [supplementaryInfo, setSupplementaryInfo] = useState<SupplementaryInfo[]>([]);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [modules, setModules] = useState<string[]>(['支付模块', '任务调度', '用户中心']);
   const [selectedModule, setSelectedModule] = useState<string>('支付模块');
@@ -28,7 +29,9 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
   const [error, setError] = useState<string | null>(null);
   const [originContentDisplay, setOriginContentDisplay] = useState<string>('');
   const [optimizedContentDisplay, setOptimizedContentDisplay] = useState<string>('');
-  const [isEditingOptimized, setIsEditingOptimized] = useState<boolean>(false);
+  const [isEditingOrigin, setIsEditingOrigin] = useState<boolean>(false);
+  const [focusedLineIndex, setFocusedLineIndex] = useState<number | null>(null);
+  const [focusTrigger, setFocusTrigger] = useState(0);
   const [activeInputTab, setActiveInputTab] = useState<'markdown' | 'file'>('markdown');
   const [snapshotHistory, setSnapshotHistory] = useState<any[]>([]);
   const [saveHint, setSaveHint] = useState<string>('');
@@ -46,6 +49,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
   const pollingTimerRef = useRef<number | null>(null);
   const jobsRef = useRef<any[]>([]);
   const activeTaskIdRef = useRef<number | null>(null);
+  const originLineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const canUndoInput = inputHistoryIndex > 0;
   const canRedoInput = inputHistoryIndex < inputHistory.length - 1;
@@ -147,10 +151,8 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       }
     }
     if (applied === 0) {
-      // Fallback: 拼接块级 AI 文本，确保能看到优化内容
-      return dedupeNearLines(
-        blks.map(b => toFinalAiText(b.originalText || '', b.aiText || '') || b.originalText || '').join('\n\n')
-      );
+      // Always keep full original document as baseline when no replacement is applied.
+      return dedupeNearLines(finalDoc);
     }
     return dedupeNearLines(finalDoc);
   }, [toFinalAiText]);
@@ -164,15 +166,46 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       .trim()
   , []);
 
-  const computeHighlighted = useCallback((origin: string, optimized: string) => {
-    const oLines = (origin || '').split('\n');
-    const set = new Set(oLines.map(normalizeForCompare).filter(Boolean));
-    return (optimized || '').split('\n').map((line) => {
-      const n = normalizeForCompare(line);
-      const changed = n.length > 0 && !set.has(n);
-      return { line, changed };
-    });
+  const findLineIndexBySnippet = useCallback((content: string, snippet: string) => {
+    const lines = (content || '').split('\n');
+    const target = normalizeForCompare(snippet || '');
+    if (!target) return -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      const n = normalizeForCompare(lines[i] || '');
+      if (!n) continue;
+      if (n.includes(target) || target.includes(n)) return i;
+    }
+    return -1;
   }, [normalizeForCompare]);
+
+  const jumpToBlockInOrigin = useCallback((blockId?: string, fallbackSnippet?: string) => {
+    const matchedBlock = blockId ? blocks.find((b) => b.id === blockId) : undefined;
+    const fallbackBlock = matchedBlock || blocks[0];
+    let snippet = matchedBlock?.originalText || fallbackBlock?.originalText || '';
+    if (!snippet && fallbackSnippet) {
+      snippet = fallbackSnippet;
+    }
+    if (!snippet) {
+      if (isEditingOrigin) setIsEditingOrigin(false);
+      setFocusedLineIndex(0);
+      setFocusTrigger((v) => v + 1);
+      return;
+    }
+    let idx = findLineIndexBySnippet(originContentDisplay, snippet);
+    if (idx < 0) {
+      idx = 0;
+    }
+    if (isEditingOrigin) setIsEditingOrigin(false);
+    setFocusedLineIndex(idx);
+    setFocusTrigger((v) => v + 1);
+  }, [blocks, originContentDisplay, findLineIndexBySnippet, isEditingOrigin]);
+
+  useEffect(() => {
+    if (focusedLineIndex === null) return;
+    const el = originLineRefs.current[focusedLineIndex];
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusedLineIndex, focusTrigger, isEditingOrigin]);
 
   const undoInputText = useCallback(() => {
     if (canUndoInput) {
@@ -332,28 +365,20 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       ...b,
       aiText: toFinalAiText(b.originalText || '', b.aiText || '')
     }));
-    const effectiveConflicts = (result.conflicts || []).filter((c: any) => !c.ignored);
-    const withConflictAwareChange = cleanedBlocks.map((b: any) => {
-      const related = effectiveConflicts.filter((c: any) => c.blockId === b.id);
-      const changed = (b.aiText || '').trim() !== (b.originalText || '').trim();
-      return { ...b, hasChange: related.length > 0 ? changed : b.hasChange };
-    });
-    setBlocks(withConflictAwareChange);
+    setBlocks(cleanedBlocks);
     setConflicts(result.conflicts || []);
     setTaskId(data.task_id);
     setProcessTime(data.processing_time_sec || result.processing_time_sec || null);
     setSnapshotHistory(data.snapshots || []);
-    if (effectiveConflicts.length === 0) {
-      setOptimizedContentDisplay(finalContent);
-    } else {
-      setOptimizedContentDisplay(buildOptimizedDocument(finalContent, withConflictAwareChange));
-    }
+    setOptimizedContentDisplay(buildOptimizedDocument(finalContent, cleanedBlocks));
+    setSupplementaryInfo(result.supplementaryInfo || []);
   }, [toFinalAiText, buildOptimizedDocument]);
 
   const openCompletedTask = useCallback((job: any) => {
     if (!job?.result) return;
     setActiveTaskId(job.taskId);
     setTaskId(job.taskId);
+    setIsEditingOrigin(false);
     setOriginContentDisplay(job.originContent || '');
     applyReviewResult(
       {
@@ -486,6 +511,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       setTaskId(null);
       setActiveTaskId(null);
       setProcessTime(null);
+      setIsEditingOrigin(false);
       setOriginContentDisplay('');
       setOptimizedContentDisplay('');
       setSnapshotHistory([]);
@@ -511,7 +537,8 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       setError('请先选择一个评审任务再重新评审');
       return;
     }
-    const content = (optimizedContentDisplay || buildOptimizedDocument(originContentDisplay, blocks) || originContentDisplay).trim();
+    // Re-review should use original requirement content, not optimized draft.
+    const content = (originContentDisplay || '').trim();
     if (!content) {
       setError('当前无可重新评审内容');
       return;
@@ -552,6 +579,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       setTaskId(null);
       setActiveTaskId(null);
       setProcessTime(null);
+      setIsEditingOrigin(false);
       setOriginContentDisplay('');
       setOptimizedContentDisplay('');
       setSnapshotHistory([]);
@@ -569,7 +597,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
     } finally {
       setIsSubmittingReview(false);
     }
-  }, [taskId, activeTaskId, optimizedContentDisplay, buildOptimizedDocument, originContentDisplay, blocks, selectedModule]);
+  }, [taskId, activeTaskId, originContentDisplay, selectedModule]);
 
   const handleResetInput = useCallback(async () => {
     const currentTaskId = taskId ?? activeTaskId;
@@ -586,6 +614,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
     setTaskId(null);
     setActiveTaskId(null);
     setProcessTime(null);
+    setIsEditingOrigin(false);
     setInputText('');
     setOriginContentDisplay('');
     setOptimizedContentDisplay('');
@@ -594,16 +623,12 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
     setUploadedFile(null);
     setFileContent('');
     setSnapshotHistory([]);
+    setSupplementaryInfo([]);
+    setFocusedLineIndex(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   }, [taskId, activeTaskId]);
-
-  const handleIgnoreConflict = (conflictId: string) => {
-    setConflicts(conflicts.map(c => c.id === conflictId ? { ...c, ignored: !c.ignored } : c));
-  };
-
-  const handleAiTextChange = (blockId: string, newText: string) => {};
 
   useEffect(() => {
     return () => {
@@ -613,12 +638,15 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
 
   const handleSelectTask = useCallback((job: any) => {
     setActiveTaskId(job.taskId);
+    setIsEditingOrigin(false);
+    setFocusedLineIndex(null);
     if (job.status === 'completed' && job.result) {
       openCompletedTask(job);
       return;
     }
     setBlocks([]);
     setConflicts([]);
+    setSupplementaryInfo([]);
     setTaskId(job.taskId);
     setProcessTime(job.processing_time_sec ?? null);
     setOriginContentDisplay(job.originContent || '');
@@ -632,6 +660,16 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
     if (status === 'failed') return { text: '失败', cls: 'bg-red-100 text-red-700' };
     return { text: '待评审', cls: 'bg-amber-100 text-amber-700' };
   };
+
+  const isConflictType = (type?: string) => {
+    const t = (type || '').toLowerCase();
+    return t === 'conflict' || t.endsWith('_conflict') || t.includes('logic') || t.includes('rule') || t.includes('data') || t.includes('process');
+  };
+
+  const conflictItems = conflicts.filter((c) => isConflictType(c.type));
+  const specItems = conflicts.filter((c) => !isConflictType(c.type));
+  const improvementItems = supplementaryInfo || [];
+  const reportCount = conflictItems.length + specItems.length + improvementItems.length;
 
   const sidebarPanel = (
     <div className="p-2 sm:p-3 h-full min-h-[420px] border-r border-slate-200">
@@ -686,18 +724,19 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
 
   const handleMergeConfirm = async () => {
     if (!taskId) {
-      setError('缺少任务 ID，请重新执行评审后再 Merge');
+      setError('缺少任务 ID，请重新执行评审后再导入知识库');
       return;
     }
     try {
-      const finalContent = (optimizedContentDisplay || buildOptimizedDocument(originContentDisplay, blocks)).trim();
+      const autoContent = buildOptimizedDocument(originContentDisplay, blocks).trim();
+      const finalContent = (autoContent || optimizedContentDisplay).trim();
       if (!finalContent) {
-        setError('Merge 内容为空，请先完成优化内容');
+        setError('导入内容为空，请先完成优化内容');
         return;
       }
       const response = await reviewApi.merge(taskId, finalContent);
       setIsMergeModalOpen(false);
-      const mergeMsg = response.data?.message || 'Merge 成功！文档已归档。';
+      const mergeMsg = response.data?.message || '导入知识库成功！文档已归档。';
       const indexingErr = response.data?.indexing_error;
       setMergeResultModal({
         open: true,
@@ -721,7 +760,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       setMergeResultModal({
         open: true,
         success: false,
-        message: `Merge 失败：${detail}`,
+        message: `导入知识库失败：${detail}`,
         canView: false
       });
     }
@@ -740,7 +779,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
         processing_time_sec: processTime ?? undefined,
         blocks: blocks || [],
         conflicts: conflicts || [],
-        supplementaryInfo: []
+        supplementaryInfo: supplementaryInfo || []
       });
       const updated = mapTaskToJob(res.data);
       setReviewJobs((prev) =>
@@ -751,11 +790,31 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       }
       setSaveHint('快照已保存');
       window.setTimeout(() => setSaveHint(''), 1600);
+      // 保存后回到空态待上传页（不删除左侧任务记录）
+      setBlocks([]);
+      setConflicts([]);
+      setSupplementaryInfo([]);
+      setTaskId(null);
+      setActiveTaskId(null);
+      setProcessTime(null);
+      setIsEditingOrigin(false);
+      setFocusedLineIndex(null);
+      setOriginContentDisplay('');
+      setOptimizedContentDisplay('');
+      setSnapshotHistory([]);
+      setInputText('');
+      setInputHistory(['']);
+      setInputHistoryIndex(0);
+      setUploadedFile(null);
+      setFileContent('');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     } catch (err: any) {
       console.error(err);
       alert(err?.response?.data?.detail || '快照保存失败');
     }
-  }, [taskId, activeTaskId, selectedModule, processTime, blocks, conflicts, mapTaskToJob]);
+  }, [taskId, activeTaskId, selectedModule, processTime, blocks, conflicts, supplementaryInfo, mapTaskToJob]);
 
   const renderMergeResultModal = () => {
     if (!mergeResultModal.open) return null;
@@ -764,7 +823,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
         <div className="bg-white w-full max-w-sm rounded-xl shadow-xl border border-slate-200 overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
             <h3 className={`text-base font-semibold ${mergeResultModal.success ? 'text-emerald-700' : 'text-red-700'}`}>
-              {mergeResultModal.success ? 'Merge 成功' : 'Merge 失败'}
+              {mergeResultModal.success ? '导入知识库成功' : '导入知识库失败'}
             </h3>
           </div>
           <div className="px-4 py-3">
@@ -797,8 +856,8 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
 
   if (blocks.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
-        <div className="w-full max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-140px)]">
+      <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-0">
+        <div className="w-full max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-76px)]">
           {sidebarPanel}
           <div className="p-2 sm:p-4 h-full overflow-y-auto min-h-0">
           <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
@@ -857,7 +916,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
 
             <div>
               {activeInputTab === 'markdown' && (
-                <div className="relative h-[350px] shrink-0">
+                <div className="relative h-[310px] shrink-0">
                   <div className="absolute top-2 right-2 flex gap-1 z-10">
                     <button 
                       onClick={undoInputText}
@@ -891,7 +950,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
                   {!uploadedFile ? (
                     <div 
                       onClick={() => fileInputRef.current?.click()}
-                      className="h-[350px] border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition-colors cursor-pointer group flex flex-col items-center justify-center shrink-0"
+                      className="h-[310px] border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition-colors cursor-pointer group flex flex-col items-center justify-center shrink-0"
                     >
                       <input 
                         type="file" 
@@ -905,7 +964,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
                       <p className="text-xs text-slate-400 mt-2">支持 .md, .txt, .pdf</p>
                     </div>
                   ) : (
-                    <div className="h-[350px] border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col shrink-0 overflow-hidden">
+                    <div className="h-[310px] border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col shrink-0 overflow-hidden">
                       <div className="flex items-center justify-between mb-4 shrink-0">
                         <div className="flex items-center gap-2">
                           <FileText className="w-5 h-5 text-slate-500" />
@@ -964,8 +1023,8 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
-      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-140px)]">
+    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-0">
+      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-4 grid grid-cols-[280px_1fr] gap-4 h-[calc(100vh-76px)]">
       {sidebarPanel}
       <div className="flex flex-col overflow-hidden h-full min-h-0 pl-0 lg:pl-2">
       <div className="border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
@@ -1015,7 +1074,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
             className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm"
           >
             <GitMerge className="w-4 h-4" />
-            <span>Merge 确认</span>
+            <span>导入知识库</span>
           </button>
         </div>
       </div>
@@ -1023,59 +1082,49 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       <div className="flex-1 min-h-0 flex overflow-hidden p-6 gap-6">
         <div className="flex-1 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
           <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 font-semibold text-slate-700 flex justify-between items-center">
-            <span>原始需求文档 (只读)</span>
-          </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-6 font-mono text-sm text-slate-600 leading-relaxed">
-            <pre className="whitespace-pre-wrap">{originContentDisplay}</pre>
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden border-t-4 border-t-indigo-500">
-          <div className="bg-indigo-50/50 px-5 py-3 border-b border-slate-200 font-semibold text-indigo-900 flex justify-between items-center">
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-              AI 优化后文档 (可编辑)
-            </span>
+            <span>原始需求文档</span>
             <button
-              onClick={() => setIsEditingOptimized(v => !v)}
-              className="px-3 py-1.5 text-xs bg-white border border-indigo-200 rounded hover:bg-indigo-100 text-indigo-700"
+              onClick={() => setIsEditingOrigin((v) => !v)}
+              className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded hover:bg-slate-100 text-slate-700"
             >
-              {isEditingOptimized ? '完成编辑' : '编辑'}
+              {isEditingOrigin ? '完成编辑' : '编辑'}
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-6 font-mono text-sm text-slate-800 leading-relaxed">
-            {isEditingOptimized ? (
+          <div className="flex-1 overflow-y-auto p-5 space-y-6 font-mono text-sm text-slate-600 leading-relaxed">
+            {isEditingOrigin ? (
               <textarea
-                value={optimizedContentDisplay}
-                onChange={(e) => setOptimizedContentDisplay(e.target.value)}
+                value={originContentDisplay}
+                onChange={(e) => setOriginContentDisplay(e.target.value)}
                 className="w-full min-h-[300px] h-full border border-slate-200 rounded-lg p-3 font-mono resize-y focus:ring-2 focus:ring-indigo-500 outline-none"
               />
             ) : (
-              <div className="space-y-1">
-                {computeHighlighted(originContentDisplay, optimizedContentDisplay).map((row, idx) => (
+              <div className="space-y-0.5">
+                {originContentDisplay.split('\n').map((line, idx) => (
                   <div
                     key={idx}
-                    className={`whitespace-pre-wrap rounded ${
-                      row.changed ? 'bg-amber-50 border-l-4 border-amber-400 pl-2' : ''
+                    ref={(el) => { originLineRefs.current[idx] = el; }}
+                    className={`whitespace-pre-wrap rounded px-1 transition-colors ${
+                      focusedLineIndex === idx ? 'bg-yellow-100 ring-1 ring-yellow-300' : ''
                     }`}
                   >
-                    {row.line || ' '}
+                    {line || ' '}
                   </div>
                 ))}
               </div>
             )}
           </div>
         </div>
+
       </div>
 
-      <div className="h-64 bg-white border-t border-slate-200 flex flex-col shrink-0">
+      <div className="h-48 bg-white border-t border-slate-200 flex flex-col shrink-0">
         <div className="px-6 py-3 border-b border-slate-100 bg-slate-50/50">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-slate-800 flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               冲突与规范检查报告
               <span className="ml-2 px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-xs">
-                {conflicts.filter(c => !c.ignored).length} 项待处理
+                {reportCount} 项待处理
               </span>
             </h3>
             <span className="text-xs text-slate-500">评审快照：{snapshotHistory.length}</span>
@@ -1091,45 +1140,64 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
           )}
         </div>
         <div className="flex-1 overflow-x-auto p-4 flex gap-4">
-          {conflicts.length === 0 ? (
+          {reportCount === 0 ? (
             <div className="w-full flex items-center justify-center text-slate-400 text-sm">
               <CheckCircle className="w-5 h-5 mr-2 text-emerald-500" />
               未检测到明显冲突
             </div>
           ) : (
-            conflicts.map(conflict => (
+            <>
+            {conflictItems.map(conflict => (
               <div 
                 key={conflict.id} 
-                className={`min-w-[320px] max-w-sm rounded-lg border p-4 flex flex-col transition-all ${
-                  conflict.ignored 
-                    ? 'bg-slate-50 border-slate-200 opacity-60' 
-                    : conflict.type === 'conflict' 
-                      ? 'bg-red-50 border-red-200 shadow-sm' 
-                      : 'bg-amber-50 border-amber-200 shadow-sm'
-                }`}
+                className="min-w-[320px] max-w-sm h-full rounded-lg border p-4 flex flex-col min-h-0 transition-all bg-red-50 border-red-200 shadow-sm overflow-hidden cursor-pointer"
+                onClick={() => jumpToBlockInOrigin(conflict.blockId, conflict.description)}
               >
                 <div className="flex items-start justify-between mb-2">
-                  <span className={`px-2 py-1 rounded text-xs font-bold ${
-                    conflict.ignored ? 'bg-slate-200 text-slate-500' :
-                    conflict.type === 'conflict' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {conflict.type === 'conflict' ? '逻辑冲突' : '规范建议'}
+                  <span className="px-2 py-1 rounded text-xs font-bold bg-red-100 text-red-700">
+                    冲突
                   </span>
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-500 cursor-pointer hover:text-slate-800">
-                    <input 
-                      type="checkbox" 
-                      checked={conflict.ignored}
-                      onChange={() => handleIgnoreConflict(conflict.id)}
-                      className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                    />
-                    忽略
-                  </label>
                 </div>
-                <p className={`text-sm flex-1 ${conflict.ignored ? 'text-slate-500 line-through' : 'text-slate-700'}`}>
+                <p className="text-sm flex-1 min-h-0 overflow-y-auto pr-1 text-slate-700 whitespace-pre-wrap break-words overflow-wrap-anywhere">
                   {conflict.description}
                 </p>
               </div>
-            ))
+            ))}
+            {specItems.map(conflict => (
+              <div
+                key={conflict.id}
+                className="min-w-[320px] max-w-sm h-full rounded-lg border p-4 flex flex-col min-h-0 transition-all bg-amber-50 border-amber-200 shadow-sm overflow-hidden cursor-pointer"
+                onClick={() => jumpToBlockInOrigin(conflict.blockId, conflict.description)}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <span className="px-2 py-1 rounded text-xs font-bold bg-amber-100 text-amber-700">
+                    规范建议
+                  </span>
+                </div>
+                <p className="text-sm flex-1 min-h-0 overflow-y-auto pr-1 text-slate-700 whitespace-pre-wrap break-words overflow-wrap-anywhere">
+                  {conflict.description}
+                </p>
+              </div>
+            ))}
+            {improvementItems.map((item) => (
+              <div
+                key={item.id}
+                className="min-w-[320px] max-w-sm h-full rounded-lg border p-4 flex flex-col min-h-0 transition-all bg-indigo-50 border-indigo-200 shadow-sm overflow-hidden"
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <span className="px-2 py-1 rounded text-xs font-bold bg-indigo-100 text-indigo-700">
+                    完善建议
+                  </span>
+                  <span className="text-xs text-slate-500 ml-2 whitespace-nowrap truncate max-w-[180px]" title={item.title}>
+                    {item.title}
+                  </span>
+                </div>
+                <p className="text-sm flex-1 min-h-0 overflow-y-auto pr-1 text-slate-700 whitespace-pre-wrap break-words overflow-wrap-anywhere">
+                  {item.content}
+                </p>
+              </div>
+            ))}
+            </>
           )}
         </div>
       </div>
@@ -1143,7 +1211,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Maximize2 className="w-5 h-5 text-indigo-600" />
-                二次确认 (干净文本)
+                导入知识库确认 (干净文本)
               </h2>
               <button 
                 onClick={() => setIsMergeModalOpen(false)}

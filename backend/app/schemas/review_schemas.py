@@ -10,7 +10,6 @@ class ConflictItem(BaseModel):
     id: str
     type: str  # 'conflict' or 'sop'
     description: str
-    ignored: bool = False
     blockId: str
     severity: Optional[str] = "Medium"
     sourceContext: Optional[str] = None

@@ -48,8 +48,8 @@ export default function PromptManagement() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-4">
-      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-[calc(100vh-140px)] flex flex-col gap-4">
+    <div className="flex-1 overflow-y-auto bg-slate-50 px-6 pt-6 pb-0">
+      <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-[calc(100vh-76px)] flex flex-col gap-4">
         <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Settings2 className="w-5 h-5 text-indigo-600" />

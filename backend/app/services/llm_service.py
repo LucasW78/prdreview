@@ -120,7 +120,6 @@ conflicts[]:
 - severity: string（仅允许：Low | Medium | High）
 - description: string（冲突点 + 影响）
 - sourceContext: string（证据上下文；无证据时可空字符串）
-- ignored: boolean（默认 false）
 
 supplementaryInfo[]:
 - id: string
@@ -246,16 +245,24 @@ def _sanitize_analysis_result(result: Dict[str, Any], new_content: str) -> Dict[
         }]
 
     block_ids = {b.get("id") for b in blocks if b.get("id")}
+    default_block_id = next(iter(block_ids), "b1")
     filtered_conflicts = []
     for c in conflicts:
-        if c.get("blockId") not in block_ids:
-            continue
+        block_id = c.get("blockId")
+        if block_id not in block_ids:
+            block_id = default_block_id
         source = (c.get("sourceContext") or "").strip()
         desc = (c.get("description") or "").strip()
-        low_evidence = (not source) or ("未找到" in source) or ("推测" in source) or ("可能" in source and len(source) < 20)
-        if low_evidence or not desc:
+        if not desc:
             continue
-        filtered_conflicts.append(c)
+        low_evidence = (not source) or ("未找到" in source) or ("推测" in source) or ("可能" in source and len(source) < 20)
+        normalized = {
+            **c,
+            "blockId": block_id,
+            "severity": c.get("severity") or ("Medium" if low_evidence else "High"),
+            "sourceContext": source or "证据上下文较弱：模型未返回可直接引用的历史片段，请结合知识库手动复核。"
+        }
+        filtered_conflicts.append(normalized)
 
     conflicts_by_block = {}
     for c in filtered_conflicts:
@@ -334,8 +341,7 @@ def _apply_conflict_rule_fallback(result: Dict[str, Any], retrieved_docs: List[D
             "type": "logic_conflict",
             "severity": "High",
             "description": "检测到“强制覆盖/必须”表述与历史“非强制建议/可选”规范存在潜在冲突（规则兜底）。",
-            "sourceContext": source_context,
-            "ignored": False
+            "sourceContext": source_context
         })
 
         original = (b.get("originalText") or "").strip()

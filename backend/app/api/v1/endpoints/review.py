@@ -242,8 +242,7 @@ async def _run_review_task_async(task_id: int, module: str, content: str):
                     ConflictCard(
                         task_id=task_id,
                         conflict_type=c.get("type", "conflict"),
-                        description=c.get("description", ""),
-                        is_ignored=c.get("ignored", False)
+                        description=c.get("description", "")
                     )
                 )
 
@@ -538,7 +537,7 @@ async def merge_confirmation(
                 content_hash
             )
         return {
-            "message": "Merge 成功，文档已归档并进入后台索引",
+            "message": "导入成功，文档已归档并进入后台索引",
             "task_id": task_id,
             "document_id": new_doc.id,
             "chunks_processed": 0,

@@ -3,12 +3,13 @@ import json
 import os
 import hashlib
 import re
+import asyncio
 from datetime import datetime
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 
 from app.db.base import get_db, AsyncSessionLocal
 from app.models.all_models import ReviewTask, ConflictCard, DocumentMetadata
@@ -25,8 +26,9 @@ from app.schemas.review_schemas import (
 )
 from app.services.rag_service import search_similar_documents, process_document
 from app.services.llm_service import analyze_conflicts, get_conflict_analysis_prompt, set_conflict_analysis_prompt
+from app.core.permissions import ensure_super_admin
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(ensure_super_admin)])
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -76,9 +78,9 @@ def _to_snapshot_item(snapshot: dict, task: ReviewTask) -> ReviewSnapshotItem:
         created_at=snapshot.get("created_at")
     )
 
-def _to_task_status_response(task: ReviewTask) -> ReviewTaskStatusResponse:
+def _to_task_status_response(task: ReviewTask, include_snapshots: bool = True) -> ReviewTaskStatusResponse:
     snapshots_raw = task.snapshot_history or []
-    snapshots = [_to_snapshot_item(s, task) for s in snapshots_raw]
+    snapshots = [_to_snapshot_item(s, task) for s in snapshots_raw] if include_snapshots else []
     result = _to_snapshot_item(task.result_snapshot, task) if task.result_snapshot else None
     document_name = _sanitize_filename_title(_extract_requirement_title(task.origin_content or ""))
     return ReviewTaskStatusResponse(
@@ -89,9 +91,49 @@ def _to_task_status_response(task: ReviewTask) -> ReviewTaskStatusResponse:
         document_name=document_name,
         processing_time_sec=task.processing_time_sec,
         error_message=task.error_message,
+        snapshots_count=len(snapshots_raw),
         result=result,
         snapshots=snapshots
     )
+
+async def _run_merge_index_async(task_id: int, final_content: str, module: str, filename: str, file_path: str, content_hash: str):
+    async with AsyncSessionLocal() as db:
+        try:
+            chunks_count = await asyncio.to_thread(process_document, final_content, module, filename)
+            await db.execute(
+                DocumentMetadata.__table__.update()
+                .where(DocumentMetadata.module == module)
+                .where(DocumentMetadata.doc_type == "prd")
+                .where(DocumentMetadata.content_hash != content_hash)
+                .values(is_latest=False)
+            )
+            existing_result = await db.execute(
+                select(DocumentMetadata).filter(DocumentMetadata.content_hash == content_hash)
+            )
+            existing_doc = existing_result.scalars().first()
+            if not existing_doc:
+                db.add(
+                    DocumentMetadata(
+                        filename=filename,
+                        module=module,
+                        doc_type="prd",
+                        content_hash=content_hash,
+                        file_path=file_path,
+                        is_latest=True
+                    )
+                )
+            task = await db.get(ReviewTask, task_id)
+            if task:
+                task.error_message = None
+                task.updated_at = datetime.utcnow()
+                task.processing_time_sec = float(chunks_count)
+            await db.commit()
+        except Exception as e:
+            task = await db.get(ReviewTask, task_id)
+            if task:
+                task.error_message = f"merge_index_failed: {str(e)}"
+                task.updated_at = datetime.utcnow()
+                await db.commit()
 
 async def _run_review_task_async(task_id: int, module: str, content: str):
     async with AsyncSessionLocal() as db:
@@ -199,14 +241,33 @@ async def get_review_task_status(
     return _to_task_status_response(task)
 
 @router.get("/tasks", response_model=ReviewTaskListResponse)
-async def list_review_tasks(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(ReviewTask)
-        .where(ReviewTask.status != "merged")
+async def list_review_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    include_snapshots: bool = Query(False),
+    db: AsyncSession = Depends(get_db)
+):
+    base_stmt = select(ReviewTask).where(ReviewTask.status != "merged")
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    stmt = (
+        base_stmt
         .order_by(ReviewTask.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
+    result = await db.execute(stmt)
     tasks = result.scalars().all()
-    return ReviewTaskListResponse(tasks=[_to_task_status_response(task) for task in tasks])
+    total_pages = (total + page_size - 1) // page_size if page_size > 0 else 1
+    return ReviewTaskListResponse(
+        tasks=[_to_task_status_response(task, include_snapshots=include_snapshots) for task in tasks],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=max(1, total_pages)
+    )
 
 @router.delete("/tasks/{task_id}")
 async def delete_review_task(task_id: int, db: AsyncSession = Depends(get_db)):
@@ -305,6 +366,7 @@ async def update_review_system_prompt(payload: dict = Body(...)):
 async def merge_confirmation(
     task_id: int,
     payload: dict = Body(...),
+    background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -356,20 +418,6 @@ async def merge_confirmation(
         with open(file_path, "wb") as f:
             f.write(content_bytes)
 
-        chunks_count = 0
-        indexing_error = None
-        try:
-            chunks_count = process_document(final_content, task.module, filename)
-        except Exception as e:
-            indexing_error = str(e)
-
-        await db.execute(
-            DocumentMetadata.__table__.update()
-            .where(DocumentMetadata.module == task.module)
-            .where(DocumentMetadata.doc_type == "prd")
-            .values(is_latest=False)
-        )
-
         new_doc = DocumentMetadata(
             filename=filename,
             module=task.module,
@@ -382,19 +430,22 @@ async def merge_confirmation(
         await db.commit()
         await db.refresh(new_doc)
 
-        if indexing_error:
-            return {
-                "message": "Merge 成功，但知识库索引失败",
-                "task_id": task_id,
-                "document_id": new_doc.id,
-                "chunks_processed": chunks_count,
-                "indexing_error": indexing_error
-            }
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _run_merge_index_async,
+                task_id,
+                final_content,
+                task.module,
+                filename,
+                file_path,
+                content_hash
+            )
         return {
-            "message": "Merge 成功，文档已归档至知识库",
+            "message": "Merge 成功，文档已归档并进入后台索引",
             "task_id": task_id,
             "document_id": new_doc.id,
-            "chunks_processed": chunks_count
+            "chunks_processed": 0,
+            "indexing_status": "processing"
         }
     except HTTPException:
         await db.rollback()

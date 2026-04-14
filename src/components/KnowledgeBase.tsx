@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { BookOpen, FileText, Search, Database, X, Eye, Trash2, AlertTriangle, Upload } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ingestionApi } from '../api';
 import DataIngestion from './DataIngestion';
 
@@ -14,6 +14,7 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
   const [selectedModule, setSelectedModule] = useState<string>('全部');
   const [documents, setDocuments] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<'prd' | 'sop'>('prd');
   const [loading, setLoading] = useState(false);
   const [hasQueried, setHasQueried] = useState(false);
@@ -24,6 +25,20 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
   const [deleteDoc, setDeleteDoc] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(totalDocs / 6)), [totalDocs]);
+  const visiblePages = useMemo(() => {
+    const windowSize = 7;
+    if (totalPages <= windowSize) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const half = Math.floor(windowSize / 2);
+    let start = Math.max(1, currentPage - half);
+    let end = Math.min(totalPages, start + windowSize - 1);
+    if (end - start + 1 < windowSize) {
+      start = Math.max(1, end - windowSize + 1);
+    }
+    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  }, [currentPage, totalPages]);
 
   const loadDocuments = useCallback(() => {
     setLoading(true);
@@ -74,7 +89,12 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
   }, [activeTab]);
 
   useEffect(() => {
-    setCurrentPage(1);
+    if (!hasQueried) return;
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+      return;
+    }
+    loadDocuments();
   }, [selectedModule, searchQuery, activeTab]);
 
   useEffect(() => {
@@ -132,6 +152,15 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
   };
 
   const handleSearch = () => {
+    const nextQuery = searchInputRef.current?.value?.trim() || '';
+    const queryChanged = nextQuery !== searchQuery;
+    if (queryChanged) {
+      setSearchQuery(nextQuery);
+      if (currentPage !== 1) {
+        setCurrentPage(1);
+      }
+      return;
+    }
     if (currentPage === 1) {
       loadDocuments();
       return;
@@ -224,10 +253,10 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <input 
+              ref={searchInputRef}
               type="text" 
               placeholder="搜索文档名称..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              defaultValue={searchQuery}
               onKeyDown={handleSearchKeyDown}
               className="w-full h-11 pl-10 pr-4 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none bg-white text-slate-700"
             />
@@ -339,7 +368,7 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
                 >
                   ‹
                 </button>
-                {Array.from({ length: Math.ceil(totalDocs / 6) || 1 }, (_, i) => i + 1).map(page => (
+                {visiblePages.map(page => (
                   <button
                     key={page}
                     onClick={() => setCurrentPage(page)}
@@ -353,8 +382,8 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
                   </button>
                 ))}
                 <button
-                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalDocs / 6) || 1, p + 1))}
-                  disabled={currentPage === (Math.ceil(totalDocs / 6) || 1) || loading}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages || loading}
                   className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   ›
@@ -449,7 +478,7 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
                 >
                   ‹
                 </button>
-                {Array.from({ length: Math.ceil(totalDocs / 6) || 1 }, (_, i) => i + 1).map(page => (
+                {visiblePages.map(page => (
                   <button
                     key={page}
                     onClick={() => setCurrentPage(page)}
@@ -463,8 +492,8 @@ export default function KnowledgeBase({ focusModule = null, focusKey = 0 }: Know
                   </button>
                 ))}
                 <button
-                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalDocs / 6) || 1, p + 1))}
-                  disabled={currentPage === (Math.ceil(totalDocs / 6) || 1) || loading}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages || loading}
                   className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   ›

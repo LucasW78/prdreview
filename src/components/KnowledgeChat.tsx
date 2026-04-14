@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { Send, Bot, User, Loader2, BookOpen, Search, Square, Plus, RefreshCcw, MessageSquareText, Pencil, Trash2 } from 'lucide-react';
 import { chatApi, ingestionApi } from '../api';
@@ -53,6 +53,123 @@ const shouldShowSources = (msg: Message) => {
   return !noEvidenceSignals.some((s) => text.includes(s));
 };
 
+const dedupeSources = (sources: SourceDoc[]) =>
+  sources.reduce((acc, src) => {
+    const existing = acc.find((s) => s.filename === src.filename);
+    if (!existing || src.score > existing.score) {
+      return [...acc.filter((s) => s.filename !== src.filename), src];
+    }
+    return acc;
+  }, [] as SourceDoc[]);
+
+const SessionItem = React.memo(function SessionItem({
+  session,
+  active,
+  onSelect,
+  onRename,
+  onDelete,
+}: {
+  session: ChatSession;
+  active: boolean;
+  onSelect: (id: string) => void;
+  onRename: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(session.id)}
+      className={`group w-full text-left rounded-lg border p-3 transition-colors ${
+        active ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <MessageSquareText className="w-4 h-4 text-slate-500 shrink-0" />
+        <span className="text-sm text-slate-700 truncate flex-1">{session.title}</span>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onRename(session.id);
+            }}
+            className="p-1 rounded hover:bg-white"
+            title="重命名"
+          >
+            <Pencil className="w-3.5 h-3.5 text-slate-500" />
+          </span>
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(session.id);
+            }}
+            className="p-1 rounded hover:bg-white"
+            title="删除"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-500" />
+          </span>
+        </div>
+      </div>
+      <div className="mt-1 text-[11px] text-slate-400">{new Date(session.updatedAt).toLocaleString()}</div>
+    </button>
+  );
+});
+
+const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Message }) {
+  const uniqueSources = useMemo(
+    () => (msg.sources && msg.sources.length > 0 ? dedupeSources(msg.sources) : []),
+    [msg.sources]
+  );
+  return (
+    <div className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+        msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-emerald-500 text-white'
+      }`}>
+        {msg.role === 'user' ? <User className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
+      </div>
+
+      <div className={`max-w-[80%] flex flex-col gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+        <div className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed ${
+          msg.role === 'user'
+            ? 'bg-indigo-600 text-white rounded-tr-sm'
+            : 'bg-white text-slate-800 border border-slate-200 rounded-tl-sm shadow-sm whitespace-pre-wrap'
+        }`}>
+          {msg.content}
+        </div>
+
+        {shouldShowSources(msg) && uniqueSources.length > 0 && (
+          <div className="mt-2 w-full">
+            <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1">
+              <Search className="w-3 h-3" />
+              参考来源 ({uniqueSources.length})
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {uniqueSources.map((src, sIdx) => (
+                <div
+                  key={`${src.filename}-${sIdx}`}
+                  className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700 cursor-pointer transition-colors shadow-sm"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
+                  <span className="font-medium max-w-[150px] truncate">{src.filename}</span>
+                  <span className="text-slate-400">·</span>
+                  <span className="text-slate-400">{(src.score * 100).toFixed(0)}%</span>
+
+                  <div className="absolute bottom-full left-0 mb-2 w-80 p-4 bg-slate-800 text-slate-200 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-xl">
+                    <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-700">
+                      <p className="font-semibold text-white">{src.filename}</p>
+                      <span className="text-indigo-400 text-[10px]">匹配度: {(src.score * 100).toFixed(1)}%</span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed line-clamp-8">{src.content}</p>
+                    <div className="absolute -bottom-1 left-4 w-2 h-2 bg-slate-800 transform rotate-45"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export default function KnowledgeChat() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -78,6 +195,7 @@ export default function KnowledgeChat() {
   });
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const persistTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!activeSessionId && sessions.length > 0) {
@@ -86,16 +204,21 @@ export default function KnowledgeChat() {
   }, [activeSessionId, sessions]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(sessions));
-    } catch {}
-  }, [sessions]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CHAT_ACTIVE_KEY, activeSessionId || '');
-    } catch {}
-  }, [activeSessionId]);
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      try {
+        localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(sessions));
+        localStorage.setItem(CHAT_ACTIVE_KEY, activeSessionId || '');
+      } catch {}
+    }, 300);
+    return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+      }
+    };
+  }, [sessions, activeSessionId]);
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) || sessions[0],
@@ -126,7 +249,7 @@ export default function KnowledgeChat() {
     setInput('');
   };
 
-  const handleRenameSession = (sessionId: string) => {
+  const handleRenameSession = useCallback((sessionId: string) => {
     const target = sessions.find((s) => s.id === sessionId);
     if (!target) return;
     const next = window.prompt('请输入新的会话名称', target.title);
@@ -134,9 +257,9 @@ export default function KnowledgeChat() {
     const title = next.trim();
     if (!title) return;
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title } : s)));
-  };
+  }, [sessions]);
 
-  const handleDeleteSession = (sessionId: string) => {
+  const handleDeleteSession = useCallback((sessionId: string) => {
     const ok = window.confirm('确认删除该会话吗？');
     if (!ok) return;
     setSessions((prev) => {
@@ -151,7 +274,7 @@ export default function KnowledgeChat() {
       }
       return next;
     });
-  };
+  }, [activeSessionId]);
 
   const handleClearAllSessions = () => {
     const ok = window.confirm('确认清空全部会话历史吗？');
@@ -324,41 +447,14 @@ export default function KnowledgeChat() {
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 pr-1">
             {sessions.map((s) => (
-              <button
+              <SessionItem
                 key={s.id}
-                onClick={() => setActiveSessionId(s.id)}
-                className={`group w-full text-left rounded-lg border p-3 transition-colors ${
-                  s.id === activeSession?.id ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <MessageSquareText className="w-4 h-4 text-slate-500 shrink-0" />
-                  <span className="text-sm text-slate-700 truncate flex-1">{s.title}</span>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRenameSession(s.id);
-                      }}
-                      className="p-1 rounded hover:bg-white"
-                      title="重命名"
-                    >
-                      <Pencil className="w-3.5 h-3.5 text-slate-500" />
-                    </span>
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteSession(s.id);
-                      }}
-                      className="p-1 rounded hover:bg-white"
-                      title="删除"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-red-500" />
-                    </span>
-                  </div>
-                </div>
-                <div className="mt-1 text-[11px] text-slate-400">{new Date(s.updatedAt).toLocaleString()}</div>
-              </button>
+                session={s}
+                active={s.id === activeSession?.id}
+                onSelect={setActiveSessionId}
+                onRename={handleRenameSession}
+                onDelete={handleDeleteSession}
+              />
             ))}
           </div>
         </aside>
@@ -385,64 +481,7 @@ export default function KnowledgeChat() {
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-4xl mx-auto space-y-6">
               {displayMessages.map((msg, idx) => (
-                <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                    msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-emerald-500 text-white'
-                  }`}>
-                    {msg.role === 'user' ? <User className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
-                  </div>
-
-                  <div className={`max-w-[80%] flex flex-col gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                    <div className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed ${
-                      msg.role === 'user'
-                        ? 'bg-indigo-600 text-white rounded-tr-sm'
-                        : 'bg-white text-slate-800 border border-slate-200 rounded-tl-sm shadow-sm whitespace-pre-wrap'
-                    }`}>
-                      {msg.content}
-                    </div>
-
-                    {shouldShowSources(msg) && (() => {
-                      const uniqueSources = msg.sources.reduce((acc, src) => {
-                        const existing = acc.find(s => s.filename === src.filename);
-                        if (!existing || src.score > existing.score) {
-                          return [...acc.filter(s => s.filename !== src.filename), src];
-                        }
-                        return acc;
-                      }, [] as typeof msg.sources);
-
-                      return (
-                        <div className="mt-2 w-full">
-                          <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1">
-                            <Search className="w-3 h-3" />
-                            参考来源 ({uniqueSources.length})
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {uniqueSources.map((src, sIdx) => (
-                              <div
-                                key={`${src.filename}-${sIdx}`}
-                                className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700 cursor-pointer transition-colors shadow-sm"
-                              >
-                                <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-                                <span className="font-medium max-w-[150px] truncate">{src.filename}</span>
-                                <span className="text-slate-400">·</span>
-                                <span className="text-slate-400">{(src.score * 100).toFixed(0)}%</span>
-
-                                <div className="absolute bottom-full left-0 mb-2 w-80 p-4 bg-slate-800 text-slate-200 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 shadow-xl">
-                                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-700">
-                                    <p className="font-semibold text-white">{src.filename}</p>
-                                    <span className="text-indigo-400 text-[10px]">匹配度: {(src.score * 100).toFixed(1)}%</span>
-                                  </div>
-                                  <p className="text-slate-300 leading-relaxed line-clamp-8">{src.content}</p>
-                                  <div className="absolute -bottom-1 left-4 w-2 h-2 bg-slate-800 transform rotate-45"></div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
+                <ChatMessageItem key={idx} msg={msg} />
               ))}
               {isLoading && (
                 <div className="flex gap-4">

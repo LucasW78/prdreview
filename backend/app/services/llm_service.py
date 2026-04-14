@@ -352,7 +352,7 @@ async def build_history_context(history: List[Dict] = None, keep_recent: int = 6
     }
     return [summary_message] + recent
 
-def answer_question(query: str, retrieved_docs: List[Dict], history: List[Dict] = None) -> str:
+async def answer_question_async(query: str, retrieved_docs: List[Dict], history: List[Dict] = None) -> str:
     """
     通用知识库问答方法，支持多轮对话上下文。
     """
@@ -378,6 +378,37 @@ def answer_question(query: str, retrieved_docs: List[Dict], history: List[Dict] 
                 messages.append(AIMessage(content=msg.get("content")))
 
     # 添加当前问题
+    messages.append(HumanMessage(content=f"<CONTEXT>\n{context_str}\n</CONTEXT>\n\n<QUESTION>\n{query}\n</QUESTION>"))
+
+    try:
+        response = await llm.ainvoke(messages)
+        answer = (response.content or "").strip()
+        if retrieved_docs and _is_refusal_answer(answer):
+            return _extractive_fallback_answer(query, retrieved_docs)
+        return answer
+    except Exception as e:
+        print(f"Error in answer_question: {e}")
+        return "抱歉，在生成回答时遇到了服务器错误，请稍后再试。"
+
+def answer_question(query: str, retrieved_docs: List[Dict], history: List[Dict] = None) -> str:
+    """
+    兼容旧调用路径：保留同步入口，但推荐使用 answer_question_async。
+    """
+    # 组装上下文
+    context_parts = []
+    for i, doc in enumerate(retrieved_docs):
+        context_parts.append(
+            f"--- 片段 {i+1} ---\n来源: {doc.get('filename')}\n章节: {doc.get('header_path')}\n检索分数: {doc.get('score')}\n内容: {doc.get('content')}\n"
+        )
+    context_str = "\n".join(context_parts) if context_parts else "未检索到相关参考文档。"
+
+    messages = [SystemMessage(content=QA_SYSTEM_PROMPT)]
+    if history:
+        for msg in history:
+            if msg.get("role") == "user":
+                messages.append(HumanMessage(content=msg.get("content")))
+            elif msg.get("role") == "assistant":
+                messages.append(AIMessage(content=msg.get("content")))
     messages.append(HumanMessage(content=f"<CONTEXT>\n{context_str}\n</CONTEXT>\n\n<QUESTION>\n{query}\n</QUESTION>"))
 
     try:

@@ -1,9 +1,11 @@
 from fastapi import APIRouter, HTTPException
+from fastapi import Depends
 from typing import Any
 import re
 from app.schemas.chat_schemas import ChatRequest, ChatResponse, SourceDoc
 from app.services.rag_service import search_similar_documents
-from app.services.llm_service import answer_question, rewrite_query, build_history_context
+from app.services.llm_service import answer_question_async, rewrite_query, build_history_context
+from app.core.permissions import get_permission_context, PermissionContext, ensure_module_access
 import time
 
 router = APIRouter()
@@ -38,7 +40,10 @@ def _rerank_by_query_focus(query: str, docs: list[dict], keep: int = 4) -> list[
     return reranked[:keep]
 
 @router.post("/ask", response_model=ChatResponse)
-async def ask_question(request: ChatRequest) -> Any:
+async def ask_question(
+    request: ChatRequest,
+    ctx: PermissionContext = Depends(get_permission_context)
+) -> Any:
     """
     接收用户问题，检索知识库，返回解答和引用来源。
     """
@@ -48,7 +53,13 @@ async def ask_question(request: ChatRequest) -> Any:
         search_query = await rewrite_query(request.query, context_history)
         # 1. 根据问题检索相关文档片段 (这里取 top 5)
         # 如果是"全部"模块，传入None让底层查询所有
-        target_module = request.module if request.module and request.module != "全部" else None
+        if ctx.is_super_admin:
+            target_module = request.module if request.module and request.module != "全部" else None
+        else:
+            if not request.module or request.module == "全部":
+                raise HTTPException(status_code=403, detail="业务线用户需指定所属业务线模块")
+            ensure_module_access(ctx, request.module)
+            target_module = request.module
         
         # 记录检索时间
         start_time = time.time()
@@ -57,7 +68,7 @@ async def ask_question(request: ChatRequest) -> Any:
         print(f"RAG search took {time.time() - start_time:.2f}s, found {len(retrieved_docs)} docs")
 
         # 2. 调用大模型生成回答
-        answer = answer_question(request.query, retrieved_docs, context_history)
+        answer = await answer_question_async(request.query, retrieved_docs, context_history)
 
         # 3. 组装响应数据：若回答判定“无直接依据”，不返回参考来源
         sources = []

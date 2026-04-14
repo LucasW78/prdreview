@@ -60,11 +60,16 @@ class ReviewTaskStatusResponse(BaseModel):
     document_name: Optional[str] = None
     processing_time_sec: Optional[float] = None
     error_message: Optional[str] = None
+    snapshots_count: int = 0
     result: Optional[ReviewSnapshotItem] = None
     snapshots: List[ReviewSnapshotItem] = []
 
 class ReviewTaskListResponse(BaseModel):
     tasks: List[ReviewTaskStatusResponse]
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
 
 class SaveSnapshotRequest(BaseModel):
     module: Optional[str] = None

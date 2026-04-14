@@ -9,6 +9,20 @@ const apiClient = axios.create({
   },
 });
 
+apiClient.interceptors.request.use((config) => {
+  const userEmail = localStorage.getItem('rag_user_email');
+  const token = localStorage.getItem('rag_access_token');
+  const headers = (config.headers || {}) as any;
+  if (userEmail) {
+    headers['X-User-Email'] = userEmail;
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  config.headers = headers;
+  return config;
+});
+
 export const ingestionApi = {
   getModules: () => apiClient.get('/ingestion/modules'),
   getHistory: (params?: { module?: string; keyword?: string; doc_type?: string; page?: number }) =>
@@ -28,8 +42,8 @@ export const ingestionApi = {
 export const reviewApi = {
   analyze: (data: { module: string; content: string; sop_ids?: string[] }) => 
     apiClient.post('/review/analyze', data),
-  listTasks: () =>
-    apiClient.get('/review/tasks'),
+  listTasks: (params?: { page?: number; page_size?: number; include_snapshots?: boolean }) =>
+    apiClient.get('/review/tasks', { params }),
   deleteTask: (taskId: number) =>
     apiClient.delete(`/review/tasks/${taskId}`),
   getTaskStatus: (taskId: number) =>
@@ -49,6 +63,13 @@ export const reviewApi = {
 export const chatApi = {
   ask: (data: { query: string; module: string; history: any[] }, signal?: AbortSignal) =>
     apiClient.post('/chat/ask', data, { signal }),
+};
+
+export const authApi = {
+  getPermissions: () => apiClient.get('/auth/permissions'),
+  getPermissionConfig: () => apiClient.get('/auth/permission-config'),
+  updatePermissionConfig: (data: { super_admin_emails: string[]; business_line_members: Record<string, string[]> }) =>
+    apiClient.put('/auth/permission-config', data),
 };
 
 export default apiClient;

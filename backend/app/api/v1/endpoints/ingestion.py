@@ -10,6 +10,7 @@ from app.db.base import get_db
 from app.models.all_models import DocumentMetadata
 from app.schemas.document_schemas import UploadResponse, DocumentListResponse
 from app.services.rag_service import process_document
+from app.core.permissions import get_permission_context, ensure_module_access, PermissionContext
 
 router = APIRouter()
 
@@ -21,12 +22,14 @@ async def upload_document(
     file: UploadFile = File(...),
     module: str = Form(...),
     doc_type: str = Form("prd"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    ctx: PermissionContext = Depends(get_permission_context)
 ):
     """
     Upload a PRD or SOP document, process it, and ingest into Qdrant.
     """
     print(f"Received upload request: file={file.filename}, module={module}, doc_type={doc_type}")
+    ensure_module_access(ctx, module)
     if not file.filename.endswith(('.md', '.txt')):
         raise HTTPException(status_code=400, detail="Currently only .md and .txt files are supported for MVP.")
     
@@ -97,18 +100,19 @@ async def upload_document(
     )
 
 @router.get("/modules")
-async def get_modules():
+async def get_modules(ctx: PermissionContext = Depends(get_permission_context)):
     """
     Get available business modules. (Mocked for MVP)
     """
-    return {
-        "modules": [
-            "支付模块",
-            "任务调度",
-            "用户中心",
-            "治理"
-        ]
-    }
+    modules = [
+        "支付模块",
+        "任务调度",
+        "用户中心",
+        "治理"
+    ]
+    if ctx.is_super_admin:
+        return {"modules": modules}
+    return {"modules": [m for m in modules if m in ctx.allowed_modules]}
 
 @router.get("/history", response_model=DocumentListResponse)
 async def get_upload_history(
@@ -116,14 +120,22 @@ async def get_upload_history(
     keyword: Optional[str] = Query(None),
     doc_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    ctx: PermissionContext = Depends(get_permission_context)
 ):
     """
     Get history of uploaded documents.
     """
     stmt = select(DocumentMetadata)
-    if module and module != "全部":
-        stmt = stmt.where(DocumentMetadata.module == module)
+    if ctx.is_super_admin:
+        if module and module != "全部":
+            stmt = stmt.where(DocumentMetadata.module == module)
+    else:
+        if module and module != "全部":
+            ensure_module_access(ctx, module)
+            stmt = stmt.where(DocumentMetadata.module == module)
+        else:
+            stmt = stmt.where(DocumentMetadata.module.in_(ctx.allowed_modules))
     if keyword:
         stmt = stmt.where(DocumentMetadata.filename.ilike(f"%{keyword}%"))
     if doc_type in {"prd", "sop"}:
@@ -150,7 +162,11 @@ async def get_upload_history(
     }
 
 @router.get("/document/{doc_id}")
-async def get_document_content(doc_id: int, db: AsyncSession = Depends(get_db)):
+async def get_document_content(
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+    ctx: PermissionContext = Depends(get_permission_context)
+):
     """
     Get document content by ID.
     """
@@ -161,6 +177,8 @@ async def get_document_content(doc_id: int, db: AsyncSession = Depends(get_db)):
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    if not ctx.is_super_admin:
+        ensure_module_access(ctx, document.module)
     
     if not document.file_path or not os.path.exists(document.file_path):
         raise HTTPException(status_code=404, detail="Document file not found")
@@ -180,7 +198,11 @@ async def get_document_content(doc_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to read document: {str(e)}")
 
 @router.delete("/document/{doc_id}")
-async def delete_document(doc_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_document(
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+    ctx: PermissionContext = Depends(get_permission_context)
+):
     """
     Delete a document by ID.
     """
@@ -191,6 +213,8 @@ async def delete_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
+    if not ctx.is_super_admin:
+        ensure_module_access(ctx, document.module)
     
     try:
         if document.file_path and os.path.exists(document.file_path):

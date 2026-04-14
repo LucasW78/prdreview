@@ -2,9 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, CheckCircle, Info, GitMerge, X, Maximize2, Play, FileText, UploadCloud, Trash2, FileUp } from 'lucide-react';
 import { Conflict, DocBlock } from '../types';
 import { reviewApi, ingestionApi } from '../api';
-import * as pdfjsLib from 'pdfjs-dist';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 interface ReviewWorkbenchProps {
   onNavigateKnowledge?: (module?: string) => void;
@@ -228,6 +225,11 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
       reader.onload = async (e) => {
         try {
           const arrayBuffer = e.target?.result as ArrayBuffer;
+          const pdfjsLib = await import('pdfjs-dist');
+          pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+            'pdfjs-dist/build/pdf.worker.min.mjs',
+            import.meta.url
+          ).toString();
           const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
           const texts: string[] = [];
           for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
@@ -373,6 +375,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
     processing_time_sec: task.processing_time_sec ?? null,
     error_message: task.error_message ?? null,
     snapshots: task.snapshots || [],
+    snapshots_count: task.snapshots_count ?? (task.snapshots || []).length ?? 0,
     result: task.result || null,
     created_at: task.snapshots?.[0]?.created_at || ''
   }), []);
@@ -418,7 +421,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
   }, [stopPolling]);
 
   useEffect(() => {
-    reviewApi.listTasks()
+    reviewApi.listTasks({ page: 1, page_size: 50, include_snapshots: false })
       .then((res) => {
         const tasks = res.data?.tasks || [];
         setReviewJobs(tasks.map(mapTaskToJob));
@@ -666,7 +669,7 @@ export default function ReviewWorkbench({ onNavigateKnowledge }: ReviewWorkbench
                   <span className="truncate min-w-0" title={job.module}>{job.module}</span>
                   <span className="shrink-0">· 任务 #{job.taskId}</span>
                 </div>
-                <div className="mt-1 text-[11px] text-slate-400">快照 {(job.snapshots || []).length}</div>
+                <div className="mt-1 text-[11px] text-slate-400">快照 {job.snapshots_count ?? (job.snapshots || []).length}</div>
                 {job.status === 'processing' && (
                   <div className="mt-2 flex items-center gap-1 text-xs text-indigo-600">
                     <div className="animate-spin rounded-full h-3 w-3 border-b border-indigo-600"></div>

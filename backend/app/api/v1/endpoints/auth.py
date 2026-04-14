@@ -9,6 +9,13 @@ from app.core.config import settings
 from app.db.base import get_db
 from app.services import user_service
 from app.schemas import user_schemas
+from app.core.permissions import (
+    get_permission_context,
+    PermissionContext,
+    ensure_super_admin,
+    get_permission_config,
+    update_permission_config,
+)
 
 router = APIRouter()
 
@@ -52,3 +59,32 @@ async def register_user(
         )
     user = await user_service.create(db, obj_in=user_in)
     return user
+
+@router.get("/permissions")
+async def get_permissions(ctx: PermissionContext = Depends(get_permission_context)) -> Any:
+    return {
+        "role": "super_admin" if ctx.is_super_admin else "business",
+        "email": ctx.email,
+        "allowed_modules": ctx.allowed_modules
+    }
+
+@router.get("/permission-config")
+async def get_permission_config_api(
+    _: PermissionContext = Depends(ensure_super_admin),
+    db: AsyncSession = Depends(get_db)
+) -> Any:
+    return await get_permission_config(db)
+
+@router.put("/permission-config")
+async def update_permission_config_api(
+    payload: dict,
+    _: PermissionContext = Depends(ensure_super_admin),
+    db: AsyncSession = Depends(get_db)
+) -> Any:
+    super_admin_emails = payload.get("super_admin_emails") or []
+    business_line_members = payload.get("business_line_members") or {}
+    if not isinstance(super_admin_emails, list):
+        raise HTTPException(status_code=422, detail="super_admin_emails must be a list")
+    if not isinstance(business_line_members, dict):
+        raise HTTPException(status_code=422, detail="business_line_members must be an object")
+    return await update_permission_config(db, super_admin_emails, business_line_members)

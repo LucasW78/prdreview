@@ -20,5 +20,19 @@ export default defineConfig(({mode}) => {
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('react') || id.includes('react-dom')) return 'react-vendor';
+            if (id.includes('axios')) return 'axios-vendor';
+            if (id.includes('lucide-react')) return 'icon-vendor';
+            if (id.includes('pdfjs-dist')) return 'pdf-vendor';
+            return 'vendor';
+          },
+        },
+      },
+    },
   };
 });

@@ -12,7 +12,8 @@
 - 支持输入需求文本并发起智能评审
 - 输出冲突卡片、优化内容、补充信息
 - 支持忽略冲突、编辑优化稿、二次确认后 Merge
-- Merge 归档文件命名为 `${需求标题}.md`
+- 支持异步任务快照、重新评审、取消即删除、Merge 结果弹窗
+- Merge 成功后可直接跳转到对应知识库查看
 
 ### 知识库管理
 - PRD / SOP 双 Tab 管理
@@ -21,8 +22,15 @@
 
 ### 智能问答
 - 基于知识库检索后回答问题
-- 返回参考来源与匹配分数
-- 支持中断请求
+- Gemini 风格会话交互（左侧历史 + 右侧会话）
+- 支持新建会话、重命名、删除、清空全部、刷新后本地持久化
+- 支持中断请求、AI 回复重新生成
+- 当回答无知识依据时自动隐藏参考来源
+
+### 提示词管理
+- 独立侧边栏模块入口
+- 回显“评审工作台”系统提示词
+- 支持编辑、重置与一键应用
 
 ## 技术栈
 
@@ -91,6 +99,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - `POST /api/v1/review/analyze`：需求冲突分析
 - `POST /api/v1/review/merge/{task_id}`：确认 Merge 并归档
+- `GET /api/v1/review/tasks`：评审任务列表
+- `POST /api/v1/review/tasks/{task_id}/rerun`：原任务重新评审
+- `POST /api/v1/review/tasks/{task_id}/snapshots`：保存评审快照
+- `DELETE /api/v1/review/tasks/{task_id}`：删除评审任务
+- `GET /api/v1/review/system-prompt`：获取评审系统提示词
+- `PUT /api/v1/review/system-prompt`：更新评审系统提示词
 - `POST /api/v1/ingestion/upload`：上传文档入库
 - `GET /api/v1/ingestion/history`：知识库分页查询
 - `GET /api/v1/ingestion/document/{id}`：文档内容预览
@@ -108,6 +122,7 @@ src/
     ReviewWorkbench.tsx
     KnowledgeBase.tsx
     KnowledgeChat.tsx
+    PromptManagement.tsx
     DataIngestion.tsx
 
 backend/
@@ -138,7 +153,7 @@ backend/
 
 ## 版本说明
 
-- `v0.1.1` 更新内容见 [更新说明.md](./更新说明.md)
+- `v0.1.2` 更新内容见 [更新说明.md](./更新说明.md)
 
 ## License
 

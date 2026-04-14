@@ -53,3 +53,12 @@ class ConflictCard(Base):
     is_ignored = Column(Boolean, default=False)
     
     task = relationship("ReviewTask", back_populates="conflicts")
+
+class SystemConfig(Base):
+    __tablename__ = "system_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    config_key = Column(String, nullable=False, unique=True, index=True)
+    config_value = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)

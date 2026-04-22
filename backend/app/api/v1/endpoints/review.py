@@ -5,14 +5,14 @@ import hashlib
 import re
 import asyncio
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import delete, func
 
 from app.db.base import get_db, AsyncSessionLocal
-from app.models.all_models import ReviewTask, ConflictCard, DocumentMetadata
+from app.models.all_models import ReviewTask, ConflictCard, DocumentMetadata, SystemConfig
 from app.schemas.review_schemas import (
     ReviewRequest,
     ReviewSubmitResponse,
@@ -26,13 +26,81 @@ from app.schemas.review_schemas import (
 )
 from app.services.rag_service import search_similar_documents, process_document
 from app.services.llm_service import analyze_conflicts, get_conflict_analysis_prompt, set_conflict_analysis_prompt
-from app.core.permissions import ensure_super_admin
+from app.core.permissions import ensure_super_admin, PermissionContext, get_permission_context
 
 router = APIRouter(dependencies=[Depends(ensure_super_admin)])
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 RUNTIME_LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../runtime_logs"))
 ANALYSIS_PARSE_LOG_FILE = os.path.join(RUNTIME_LOG_DIR, "analysis_parse_failures.jsonl")
+REVIEW_PROMPT_CONFIG_KEY = "review_system_prompt_v1"
+
+def _now_iso() -> str:
+    """Return current UTC timestamp in ISO format for prompt version metadata."""
+    return datetime.utcnow().isoformat()
+
+def _normalize_prompt_history_items(items: Any) -> List[dict]:
+    """Normalize persisted prompt history into ordered, UI-safe version entries."""
+    if not isinstance(items, list):
+        return []
+    out: List[dict] = []
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        out.append({
+            "version": str(item.get("version") or f"v{idx + 1}"),
+            "prompt": prompt,
+            "updated_by": str(item.get("updated_by") or ""),
+            "created_at": str(item.get("created_at") or _now_iso())
+        })
+    return out
+
+def _build_prompt_config_payload(history: List[dict], current_version: str) -> dict:
+    """Build config payload persisted in system_configs for prompt history + active version."""
+    return {
+        "current_version": current_version,
+        "history": history
+    }
+
+async def _get_review_prompt_config_row(db: AsyncSession) -> SystemConfig | None:
+    """Fetch the system config row that stores review prompt history and active version."""
+    result = await db.execute(select(SystemConfig).where(SystemConfig.config_key == REVIEW_PROMPT_CONFIG_KEY))
+    return result.scalars().first()
+
+async def _ensure_prompt_history(
+    db: AsyncSession,
+    runtime_prompt: str,
+    operator: str
+) -> tuple[SystemConfig, List[dict], str]:
+    """Ensure history exists; seed from runtime prompt if DB is empty."""
+    row = await _get_review_prompt_config_row(db)
+    if row and isinstance(row.config_value, dict):
+        cfg = row.config_value or {}
+        history = _normalize_prompt_history_items(cfg.get("history"))
+        if history:
+            current_version = str(cfg.get("current_version") or history[-1]["version"])
+            return row, history, current_version
+    seeded_prompt = (runtime_prompt or "").strip()
+    if not seeded_prompt:
+        seeded_prompt = get_conflict_analysis_prompt().strip()
+    history = [{
+        "version": "v1",
+        "prompt": seeded_prompt,
+        "updated_by": operator,
+        "created_at": _now_iso()
+    }]
+    cfg = _build_prompt_config_payload(history, "v1")
+    if not row:
+        row = SystemConfig(config_key=REVIEW_PROMPT_CONFIG_KEY, config_value=cfg)
+        db.add(row)
+    else:
+        row.config_value = cfg
+    await db.commit()
+    await db.refresh(row)
+    return row, history, "v1"
 
 def _extract_requirement_title(content: str) -> str:
     lines = content.splitlines()
@@ -415,16 +483,102 @@ async def rerun_review_task(
         raise HTTPException(status_code=500, detail=f"Rerun failed: {str(e)}")
 
 @router.get("/system-prompt")
-async def get_review_system_prompt():
-    return {"prompt": get_conflict_analysis_prompt()}
+async def get_review_system_prompt(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return active review system prompt with version metadata and full history."""
+    runtime_prompt = get_conflict_analysis_prompt().strip()
+    _, history, current_version = await _ensure_prompt_history(db, runtime_prompt, "system")
+    current_item = next((item for item in history if item["version"] == current_version), history[-1])
+    if current_item.get("prompt"):
+        set_conflict_analysis_prompt(current_item["prompt"])
+    return {
+        "prompt": current_item["prompt"],
+        "current_version": current_item["version"],
+        "history": list(reversed(history))
+    }
 
 @router.put("/system-prompt")
-async def update_review_system_prompt(payload: dict = Body(...)):
+async def update_review_system_prompt(
+    payload: dict = Body(...),
+    ctx: PermissionContext = Depends(get_permission_context),
+    db: AsyncSession = Depends(get_db)
+):
+    """Save a new prompt as the next version and make it active immediately."""
     prompt = (payload.get("prompt") or "").strip()
     if not prompt:
         raise HTTPException(status_code=422, detail="prompt is required")
+    operator = (ctx.email or "system").strip() or "system"
+    _, history, current_version = await _ensure_prompt_history(db, get_conflict_analysis_prompt(), operator)
+    active_item = next((item for item in history if item["version"] == current_version), history[-1])
+    if active_item["prompt"] == prompt:
+        set_conflict_analysis_prompt(prompt)
+        return {
+            "message": "系统提示词未变化",
+            "prompt": prompt,
+            "current_version": active_item["version"],
+            "history": list(reversed(history))
+        }
+    next_version = f"v{len(history) + 1}"
+    history.append({
+        "version": next_version,
+        "prompt": prompt,
+        "updated_by": operator,
+        "created_at": _now_iso()
+    })
+    row = await _get_review_prompt_config_row(db)
+    if not row:
+        row = SystemConfig(config_key=REVIEW_PROMPT_CONFIG_KEY, config_value={})
+        db.add(row)
+    row.config_value = _build_prompt_config_payload(history, next_version)
+    await db.commit()
     set_conflict_analysis_prompt(prompt)
-    return {"message": "系统提示词已更新", "prompt": prompt}
+    return {
+        "message": "系统提示词已更新",
+        "prompt": prompt,
+        "current_version": next_version,
+        "history": list(reversed(history))
+    }
+
+@router.get("/system-prompt/history")
+async def get_review_system_prompt_history(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all prompt versions with active version marker."""
+    runtime_prompt = get_conflict_analysis_prompt().strip()
+    _, history, current_version = await _ensure_prompt_history(db, runtime_prompt, "system")
+    return {
+        "current_version": current_version,
+        "history": list(reversed(history))
+    }
+
+@router.post("/system-prompt/rollback")
+async def rollback_review_system_prompt(
+    payload: dict = Body(...),
+    _: PermissionContext = Depends(ensure_super_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Rollback active prompt to a selected historical version."""
+    version = str(payload.get("version") or "").strip()
+    if not version:
+        raise HTTPException(status_code=422, detail="version is required")
+    row = await _get_review_prompt_config_row(db)
+    if not row or not isinstance(row.config_value, dict):
+        raise HTTPException(status_code=404, detail="prompt history not found")
+    cfg = row.config_value or {}
+    history = _normalize_prompt_history_items(cfg.get("history"))
+    target = next((item for item in history if item["version"] == version), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="version not found")
+    row.config_value = _build_prompt_config_payload(history, version)
+    await db.commit()
+    set_conflict_analysis_prompt(target["prompt"])
+    return {
+        "message": "已回滚到指定版本",
+        "prompt": target["prompt"],
+        "current_version": version,
+        "history": list(reversed(history))
+    }
 
 @router.get("/analysis-parse-failures")
 async def get_analysis_parse_failures(

@@ -56,6 +56,10 @@ export const reviewApi = {
     apiClient.get('/review/system-prompt'),
   applySystemPrompt: (prompt: string) =>
     apiClient.put('/review/system-prompt', { prompt }),
+  getSystemPromptHistory: () =>
+    apiClient.get('/review/system-prompt/history'),
+  rollbackSystemPrompt: (version: string) =>
+    apiClient.post('/review/system-prompt/rollback', { version }),
   merge: (taskId: number, finalContent: string) => 
     apiClient.post(`/review/merge/${taskId}`, { finalContent }),
 };

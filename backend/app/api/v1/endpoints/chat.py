@@ -16,10 +16,25 @@ NO_EVIDENCE_PATTERNS = [
     "无法回答这个问题",
 ]
 
+def _extract_citation_ids(answer: str) -> set[str]:
+    """Extract citation ids like [S1]/[s2]/[1] from answer text."""
+    text = (answer or "").strip()
+    if not text:
+        return set()
+    ids: set[str] = set()
+    for matched in re.findall(r"\[(?:S)?(\d+)\]", text, flags=re.IGNORECASE):
+        if matched:
+            ids.add(f"S{matched}")
+    return ids
+
 def _should_hide_sources(answer: str) -> bool:
+    """Decide whether to suppress sources for pure no-evidence answers."""
     text = (answer or "").strip()
     if not text:
         return True
+    # If answer explicitly cites [Sx], keep sources visible.
+    if _extract_citation_ids(text):
+        return False
     return any(p in text for p in NO_EVIDENCE_PATTERNS)
 
 def _rerank_by_query_focus(query: str, docs: list[dict], keep: int = 4) -> list[dict]:
@@ -66,24 +81,33 @@ async def ask_question(
         # 2. 调用大模型生成回答
         answer = await answer_question_async(request.query, retrieved_docs, context_history)
 
-        # 3. 组装响应数据：若回答判定“无直接依据”，不返回参考来源
-        sources = []
-        if not _should_hide_sources(answer):
-            seen = set()
-            for doc in retrieved_docs:
-                key = (doc.get("filename"), doc.get("header_path"))
-                if key in seen:
-                    continue
-                seen.add(key)
-                sources.append(SourceDoc(
-                    source_id=f"S{len(sources)+1}",
-                    filename=doc.get("filename", "未知文件"),
-                    header_path=doc.get("header_path", ""),
-                    content=doc.get("content", ""),
-                    score=doc.get("score", 0.0),
-                    module=doc.get("module", "未知模块"),
-                    doc_type=doc.get("doc_type", "prd")
-                ))
+        # 3. 组装响应数据：若出现引用 [Sx]，优先返回被引用来源
+        all_sources = []
+        seen = set()
+        for doc in retrieved_docs:
+            key = (doc.get("filename"), doc.get("header_path"))
+            if key in seen:
+                continue
+            seen.add(key)
+            all_sources.append(SourceDoc(
+                source_id=f"S{len(all_sources)+1}",
+                filename=doc.get("filename", "未知文件"),
+                header_path=doc.get("header_path", ""),
+                content=doc.get("content", ""),
+                score=doc.get("score", 0.0),
+                module=doc.get("module", "未知模块"),
+                doc_type=doc.get("doc_type", "prd")
+            ))
+
+        cited_ids = _extract_citation_ids(answer)
+        if cited_ids:
+            sources = [s for s in all_sources if (s.source_id or "").upper() in cited_ids]
+            if not sources:
+                sources = all_sources
+        elif _should_hide_sources(answer):
+            sources = []
+        else:
+            sources = all_sources
 
         return ChatResponse(
             answer=answer,

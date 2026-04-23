@@ -27,6 +27,11 @@ interface ChatSession {
   messages: Message[];
 }
 
+interface RecommendedQuestionItem {
+  label: string;
+  question: string;
+}
+
 const createSession = (): ChatSession => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   title: '新对话',
@@ -36,6 +41,14 @@ const createSession = (): ChatSession => ({
 
 const CHAT_SESSIONS_KEY = 'rag-review.chat.sessions.v1';
 const CHAT_ACTIVE_KEY = 'rag-review.chat.active.v1';
+const RECOMMENDED_QUESTIONS: RecommendedQuestionItem[] = [
+  { label: '需求完整性检查', question: '请帮我检查当前模块 PRD 是否有缺失的关键需求点，并给出补充建议。' },
+  { label: 'SOP 对齐校验', question: '请对照该模块 SOP，指出 PRD 中与 SOP 不一致或冲突的地方。' },
+  { label: '流程梳理', question: '请按步骤梳理该模块核心业务流程，并标注每步对应的文档依据。' },
+  { label: '风险点识别', question: '请列出当前需求中可能导致上线风险的点，并说明影响范围。' },
+  { label: '验收标准生成', question: '请基于现有文档生成一份可执行的验收标准清单。' },
+  { label: '改动影响分析', question: '如果新增一个审批节点，会影响哪些已有功能和流程？请给出依据。' }
+];
 
 const deriveTitle = (messages: Message[]) => {
   const firstUser = messages.find((m) => m.role === 'user');
@@ -47,6 +60,8 @@ const shouldShowSources = (msg: Message) => {
   const text = (msg.content || '').trim();
   if (!msg.sources || msg.sources.length === 0) return false;
   if (!text) return false;
+  // If explicit citations exist in answer content, always show the source list.
+  if (extractCitationIds(text).size > 0) return true;
   const noEvidenceSignals = [
     '未检索到直接依据',
     '知识库中未提供相关依据',
@@ -58,11 +73,21 @@ const shouldShowSources = (msg: Message) => {
 
 const CITATION_REGEX = /\[(S\d+)\]/gi;
 
-const normalizeSourceId = (src: SourceDoc, index: number) => (src.source_id || `S${index + 1}`).toUpperCase();
+const normalizeSourceId = (src: SourceDoc, index: number) => {
+  const raw = String(src.source_id || '').trim();
+  if (!raw) return `S${index + 1}`;
+  const upper = raw.toUpperCase().replace(/[\[\]\s]/g, '');
+  if (/^S\d+$/.test(upper)) return upper;
+  if (/^\d+$/.test(upper)) return `S${upper}`;
+  const matched = upper.match(/S?(\d+)/);
+  if (matched?.[1]) return `S${matched[1]}`;
+  return `S${index + 1}`;
+};
 
 const extractCitationIds = (text: string) => {
   const ids = new Set<string>();
   if (!text) return ids;
+  CITATION_REGEX.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = CITATION_REGEX.exec(text)) !== null) {
     if (match[1]) ids.add(match[1].toUpperCase());
@@ -150,7 +175,8 @@ const ChatMessageItem = React.memo(function ChatMessageItem({ msg }: { msg: Mess
   const displayedSources = useMemo(() => {
     const withSid = uniqueSources.map((src, sIdx) => ({ src, sid: normalizeSourceId(src, sIdx) }));
     if (citedIds.size === 0) return withSid;
-    return withSid.filter((item) => citedIds.has(item.sid));
+    const citedOnly = withSid.filter((item) => citedIds.has(item.sid));
+    return citedOnly.length > 0 ? citedOnly : withSid;
   }, [uniqueSources, citedIds]);
 
   return (
@@ -354,13 +380,20 @@ export default function KnowledgeChat() {
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading || !activeSession) return;
+  /**
+   * Send a user question to chat API and append assistant response into active session.
+   * @param overrideMessage Optional message text used for quick-question click send.
+   * @returns Promise<void> completes after request lifecycle and state sync.
+   */
+  const handleSend = async (overrideMessage?: string) => {
+    const resolvedMessage = (overrideMessage ?? input).trim();
+    if (!resolvedMessage || isLoading || !activeSession) return;
 
-    const userMsg = input.trim();
-    setInput('');
+    if (!overrideMessage) {
+      setInput('');
+    }
     const previousMessages = activeMessages;
-    const newMessages: Message[] = [...previousMessages, { role: 'user', content: userMsg }];
+    const newMessages: Message[] = [...previousMessages, { role: 'user', content: resolvedMessage }];
     updateSessionMessages(activeSession.id, newMessages);
     setIsLoading(true);
 
@@ -376,7 +409,7 @@ export default function KnowledgeChat() {
 
       const response = await chatApi.ask(
         {
-          query: userMsg,
+          query: resolvedMessage,
           module: selectedModule,
           history: apiHistory
         },
@@ -463,13 +496,7 @@ export default function KnowledgeChat() {
     }
   };
 
-  // Initial greeting if no history
-  const displayMessages = activeMessages.length === 0
-    ? [{
-        role: 'assistant' as const,
-        content: '你好！我是智能知识库助手。你可以向我询问关于已有 PRD 和 SOP 的任何问题。'
-      }]
-    : activeMessages;
+  const isEmptySession = activeMessages.length === 0;
 
   return (
     <div className="flex-1 h-full bg-slate-50 overflow-hidden">
@@ -525,10 +552,30 @@ export default function KnowledgeChat() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-4xl mx-auto space-y-6">
-              {displayMessages.map((msg, idx) => (
+            <div className={`max-w-4xl mx-auto ${isEmptySession ? 'h-full flex flex-col justify-center' : 'space-y-6'}`}>
+              {!isEmptySession && activeMessages.map((msg, idx) => (
                 <ChatMessageItem key={idx} msg={msg} />
               ))}
+              {!isLoading && isEmptySession && (
+                <div className="w-full flex flex-col items-center">
+                  <h2 className="text-4xl font-bold text-slate-900 tracking-tight">你好，我是智能问答助手</h2>
+                  <p className="mt-3 text-sm text-slate-500">试试下面这些问题，或直接输入你的需求</p>
+                  <div className="mt-8 flex flex-wrap justify-center gap-3 max-w-3xl">
+                    {RECOMMENDED_QUESTIONS.map((item) => (
+                      <button
+                        key={item.label}
+                        onClick={() => {
+                          void handleSend(item.question);
+                        }}
+                        className="px-4 py-2 rounded-full border border-slate-200 bg-white text-slate-700 text-sm hover:border-indigo-300 hover:text-indigo-700 hover:bg-indigo-50 transition-colors shadow-sm"
+                        title={item.question}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {isLoading && (
                 <div className="flex gap-4">
                   <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
